@@ -61,6 +61,38 @@ enum PlatformRole {
   CUSTOMER
 }
 
+// The two plans. They unlock exactly the same software; the difference is
+// whether a real person keeps the books. So this is a support routing flag,
+// never a permission, and nothing in the code branches on it.
+enum Plan {
+  ESSENTIAL
+  SOLUTIONS_360
+}
+
+// Mirrors Stripe's own subscription statuses, narrowed to the ones this
+// product can actually be in. Kept as our own enum rather than a raw string so
+// that a typo in a webhook handler is a compile error.
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  UNPAID
+  CANCELED
+  INCOMPLETE
+}
+
+enum PaymentStatus {
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum CategoryKind {
+  INCOME
+  EXPENSE
+  DRAWINGS
+}
+
 // ------------------------------------------------------------- business ----
 // The tenant. Everything else hangs off this row.
 model Business {
@@ -101,14 +133,23 @@ model Business {
   invoiceFooter     String? @map("invoice_footer")
   invoicePayTo      String? @map("invoice_pay_to")
 
+  // Basis points, so 200 is 2% a month. Not a money column and not a Decimal:
+  // an integer rate cannot drift, and it prints on the invoice as written.
+  lateInterestBp Int? @default(200) @map("late_interest_bp")
+
   logoKey String? @map("logo_key")
 
   // Web only. The phone stays signed in until manual logout.
   idleTimeoutMinutes Int @default(15) @map("idle_timeout_minutes")
   idleWarningSeconds Int @default(60) @map("idle_warning_seconds")
 
-  users    User[]
-  sessions Session[]
+  users        User[]
+  sessions     Session[]
+  subscription Subscription?
+  invites      Invite[]
+  payments     Payment[]
+  categories   Category[]
+  vendors      Vendor[]
 
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
@@ -125,15 +166,19 @@ model User {
 
   email String @unique
 
-  /* Nullable because an account created through Google has no password. A user
-     can later set one, and a password user can later link Google, so the two
-     are not exclusive. */
+  /**
+   * Nullable because an account created through Google has no password. A user
+   * can later set one, and a password user can later link Google, so the two
+   * are not exclusive.
+   */
   passwordHash String? @map("password_hash")
 
-  /* Google's stable subject id, not the email. Google emails can change and be
-     reassigned; the subject id cannot. */
-  googleId  String? @unique @map("google_id")
-  avatarUrl String? @map("avatar_url")
+  /**
+   * Google's stable subject id, not the email. Google emails can change and be
+   * reassigned; the subject id cannot.
+   */
+  googleId     String?      @unique @map("google_id")
+  avatarUrl    String?      @map("avatar_url")
   firstName    String       @map("first_name")
   lastName     String       @map("last_name")
   role         BusinessRole @default(OWNER)
@@ -167,22 +212,210 @@ model Session {
   userId     String   @map("user_id")
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  refreshTokenHash String   @unique @map("refresh_token_hash")
+  refreshTokenHash String @unique @map("refresh_token_hash")
 
-  /* Whether the person ticked "keep me signed in".
-     Stored on the session, not worked out from the expiry date, so a refresh
-     carries the original choice forward instead of quietly upgrading a shared
-     computer to a month long session. */
-  remembered Boolean @default(true)
-  userAgent        String?  @map("user_agent")
-  ipAddress        String?  @map("ip_address")
-  lastSeenAt       DateTime @default(now()) @map("last_seen_at")
-  expiresAt        DateTime @map("expires_at")
-  revokedAt        DateTime? @map("revoked_at")
+  /**
+   * Whether the person ticked "keep me signed in".
+   * Stored on the session, not worked out from the expiry date, so a refresh
+   * carries the original choice forward instead of quietly upgrading a shared
+   * computer to a month long session.
+   */
+  remembered Boolean   @default(true)
+  userAgent  String?   @map("user_agent")
+  ipAddress  String?   @map("ip_address")
+  lastSeenAt DateTime  @default(now()) @map("last_seen_at")
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
 
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([userId])
   @@index([businessId])
   @@map("session")
+}
+
+// -------------------------------------------------------- subscription ----
+// One per business. Holds what Stripe knows, mirrored locally, so that
+// deciding whether someone may write to their own books never depends on a
+// network call to a third party.
+//
+// The only question this table has to answer is: may this business write right
+// now, yes or no. Both plans unlock the same software, so there is no per
+// feature entitlement anywhere in this codebase and there must not be one.
+model Subscription {
+  id         String   @id @default(cuid())
+  businessId String   @unique @map("business_id")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  plan   Plan               @default(ESSENTIAL)
+  status SubscriptionStatus @default(TRIALING)
+
+  // People beyond the owner, 0 to 2, at $5 each and free until the trial ends.
+  // Kept here rather than counted from the user table, because the bill has to
+  // survive a member being removed halfway through a month.
+  extraSeats Int @default(0) @map("extra_seats")
+
+  // The trial is ours. It starts at signup and exists whether or not Stripe
+  // has ever been contacted. When a card is added, this same instant is handed
+  // to Stripe as trial_end, so nobody is quietly given 14 more days.
+  trialEndsAt DateTime? @map("trial_ends_at")
+
+  currentPeriodEnd  DateTime? @map("current_period_end")
+  cancelAtPeriodEnd Boolean   @default(false) @map("cancel_at_period_end")
+
+  // Stripe's side. Nullable throughout, because an account inside its trial
+  // has never been to checkout, and that is the ordinary state for 14 days.
+  stripeCustomerId     String? @unique @map("stripe_customer_id")
+  stripeSubscriptionId String? @unique @map("stripe_subscription_id")
+
+  // The two subscription items: the plan line and the per seat line. Stored so
+  // that a seat change is an update to a known item, rather than a search
+  // through the subscription every time somebody is added.
+  stripeBaseItemId String? @map("stripe_base_item_id")
+  stripeSeatItemId String? @map("stripe_seat_item_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("subscription")
+}
+
+// ------------------------------------------------------------- payment ----
+// Written from Stripe webhooks only, never from a request. A local copy of
+// what Stripe charged, so the billing history and the superadmin panel can
+// render a table without a Stripe API call.
+model Payment {
+  id         String   @id @default(cuid())
+  businessId String   @map("business_id")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  // Whole cents, like every other money column in this schema.
+  amountCents Int           @map("amount_cents")
+  currency    String        @default("cad")
+  status      PaymentStatus
+  description String?
+
+  // Unique, so a webhook delivered twice cannot produce two rows.
+  stripeInvoiceId String?   @unique @map("stripe_invoice_id")
+  paidAt          DateTime? @map("paid_at")
+  failureReason   String?   @map("failure_reason")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([businessId])
+  @@map("payment")
+}
+
+// ------------------------------------------------------- webhook event ----
+// Stripe guarantees at-least-once delivery, which makes duplicates normal
+// rather than exceptional. The event id is the primary key, so a replay is a
+// unique violation instead of a second payment recorded.
+model WebhookEvent {
+  id         String   @id
+  type       String
+  receivedAt DateTime @default(now()) @map("received_at")
+
+  @@map("webhook_event")
+}
+
+// -------------------------------------------------------------- invite ----
+// The owner types an email address, and that person sets their own password on
+// a single use link. Deliberately not a generated password sent by email,
+// which would sit in that inbox in plain text for as long as the account
+// exists, so anyone who ever reaches the mailbox reaches the books.
+model Invite {
+  id         String   @id @default(cuid())
+  businessId String   @map("business_id")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  email String
+  role  BusinessRole @default(MEMBER)
+
+  // Hashed, exactly like a refresh token. A leaked database must not hand
+  // anybody a working way into somebody's books.
+  tokenHash   String    @unique @map("token_hash")
+  invitedById String    @map("invited_by_id")
+  expiresAt   DateTime  @map("expires_at")
+  acceptedAt  DateTime? @map("accepted_at")
+  revokedAt   DateTime? @map("revoked_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // One invite row per address per business. Inviting the same person again
+  // replaces the token, rather than leaving two live links to one set of books.
+  @@unique([businessId, email])
+  @@index([businessId])
+  @@map("invite")
+}
+
+// --------------------------------------------------------- admin audit ----
+// Superadmin is the one place businessId scoping is deliberately bypassed, so
+// it is the one place every read is recorded. Written by the admin routes
+// themselves and by nothing a customer can reach.
+model AdminAudit {
+  id          String   @id @default(cuid())
+  actorUserId String   @map("actor_user_id")
+  action      String
+  businessId  String?  @map("business_id")
+  detail      String?
+  ipAddress   String?  @map("ip_address")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([actorUserId])
+  @@index([createdAt])
+  @@map("admin_audit")
+}
+
+// ------------------------------------------------------------ category ----
+// What an entry can be filed under. Seeded for every business at signup, so
+// the first expense has somewhere to go without a trip to Settings first.
+model Category {
+  id         String   @id @default(cuid())
+  businessId String   @map("business_id")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  name String
+  kind CategoryKind
+
+  // Owner Drawings is the one that cannot be renamed or removed. It is what
+  // keeps profit honest: anything filed under it stays out of profit, out of
+  // expense reports and out of the input tax credit, and a category that could
+  // be renamed into an ordinary expense would quietly break all three.
+  isSystem  Boolean @default(false) @map("is_system")
+  sortOrder Int     @default(0) @map("sort_order")
+
+  vendors Vendor[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Archived, never deleted. A category attached to last year's entries has to
+  // go on existing for the CRA's six years, long after anyone files under it.
+  archivedAt DateTime? @map("archived_at")
+
+  @@unique([businessId, kind, name])
+  @@index([businessId])
+  @@map("category")
+}
+
+// -------------------------------------------------------------- vendor ----
+// Who money goes out to, grouped under an expense category, so that choosing
+// Bills Payment offers the utility companies rather than a list of forty names.
+model Vendor {
+  id         String   @id @default(cuid())
+  businessId String   @map("business_id")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  name       String
+  categoryId String?   @map("category_id")
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  archivedAt DateTime? @map("archived_at")
+
+  @@unique([businessId, name])
+  @@index([businessId])
+  @@index([categoryId])
+  @@map("vendor")
 }

@@ -98,6 +98,7 @@ googleRouter.post('/complete', validate(completeSchema), async (req, res, next) 
       accessToken: result.accessToken,
       user: result.user,
       business: result.business,
+      access: result.access,
     });
   } catch (err) {
     next(err);

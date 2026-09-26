@@ -35,6 +35,7 @@ function respondWithSession(
     accessToken: string;
     user: unknown;
     business: unknown;
+    access: unknown;
     remembered?: boolean;
   },
   status = 200,
@@ -44,6 +45,9 @@ function respondWithSession(
     accessToken: result.accessToken,
     user: result.user,
     business: result.business,
+    /* Whether the trial is live, and how long is left. Sent here rather than
+       fetched afterwards so the shell paints the right banner first time. */
+    access: result.access,
   });
 }
 

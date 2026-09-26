@@ -28,6 +28,20 @@ const schema = z.object({
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   GOOGLE_REDIRECT_URI: z.string().default('http://localhost:4000/api/auth/google/callback'),
+
+  /* Stripe. All optional, so the API boots and the whole product works on its
+     14 day trial without a single key. Billing routes answer 503 until the
+     secret key and the two plan prices are present. */
+  STRIPE_SECRET_KEY: z.string().optional(),
+  /* From the Stripe CLI in development, or the endpoint in the dashboard in
+     production. Without it a webhook cannot be verified, and an unverified
+     webhook is an unauthenticated stranger telling us someone has paid. */
+  STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  /* Price ids, not amounts. Stripe owns what is charged; lib/plans.ts only
+     holds what the customer is shown. */
+  STRIPE_PRICE_ESSENTIAL: z.string().optional(),
+  STRIPE_PRICE_SOLUTIONS_360: z.string().optional(),
+  STRIPE_PRICE_EXTRA_USER: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);

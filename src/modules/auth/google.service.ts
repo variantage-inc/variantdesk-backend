@@ -3,7 +3,9 @@ import type { GoogleIdentity } from '../../lib/google.js';
 import { signPendingSignup, verifyPendingSignup } from '../../lib/tokens.js';
 import { ApiError } from '../../middleware/error.js';
 import { isUniqueViolation } from '../../lib/db-errors.js';
-import { issueSession, publicBusiness, publicUser } from './session.js';
+import { defaultCategories } from '../../lib/defaults.js';
+import { trialCreateData } from '../billing/billing.service.js';
+import { issueSession, publicBusiness, publicUser, sessionAccess } from './session.js';
 
 type Ctx = { userAgent?: string; ip?: string };
 
@@ -117,7 +119,15 @@ export async function completeGoogleSignup(
   try {
     created = await prisma.$transaction(async (tx) => {
       const business = await tx.business.create({
-        data: { name: businessName, legalName: businessName, province },
+        data: {
+          name: businessName,
+          legalName: businessName,
+          province,
+          /* Same as the password signup. Arriving through Google changes how
+             the identity was proved, not what the account starts with. */
+          subscription: { create: trialCreateData() },
+          categories: { create: defaultCategories() },
+        },
       });
       const user = await tx.user.create({
         data: {
@@ -158,6 +168,7 @@ export async function completeGoogleSignup(
   return {
     user: publicUser(created.user),
     business: publicBusiness(created.business),
+    access: await sessionAccess(created.business.id),
     ...session,
   };
 }

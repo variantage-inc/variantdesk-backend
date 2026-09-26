@@ -1,9 +1,11 @@
 import { prisma } from '../../lib/prisma.js';
 import { hashPassword, verifyPassword, wastePasswordTime } from '../../lib/password.js';
 import { newLinkToken, hashToken } from '../../lib/tokens.js';
-import { issueSession, publicBusiness, publicUser, type Ctx } from './session.js';
+import { issueSession, publicBusiness, publicUser, sessionAccess, type Ctx } from './session.js';
 import { ApiError } from '../../middleware/error.js';
 import { isUniqueViolation } from '../../lib/db-errors.js';
+import { defaultCategories } from '../../lib/defaults.js';
+import { trialCreateData } from '../billing/billing.service.js';
 import type { SignupInput } from './auth.schemas.js';
 
 const RESET_MINUTES = 60;
@@ -45,6 +47,14 @@ export async function signup(input: SignupInput, ctx: Ctx) {
           name: input.businessName,
           legalName: input.businessName,
           province: input.province,
+          /* The trial and the starting categories are created with the
+             business, in the same transaction. An account without a
+             subscription row cannot be told whether it may write, and an
+             account without categories sends its owner to Settings before
+             they can record their first expense. Neither is a state worth
+             being able to reach. */
+          subscription: { create: trialCreateData() },
+          categories: { create: defaultCategories() },
         },
       });
       const user = await tx.user.create({
@@ -78,6 +88,7 @@ export async function signup(input: SignupInput, ctx: Ctx) {
   return {
     user: publicUser(created.user),
     business: publicBusiness(created.business),
+    access: await sessionAccess(created.business.id),
     ...tokens,
   };
 }
@@ -134,6 +145,7 @@ export async function login(
   return {
     user: publicUser(user),
     business: publicBusiness(user.business),
+    access: await sessionAccess(user.businessId),
     ...tokens,
   };
 }
@@ -191,6 +203,7 @@ export async function refresh(rawToken: string, ctx: Ctx) {
   return {
     user: publicUser(user),
     business: publicBusiness(user.business),
+    access: await sessionAccess(user.businessId),
     ...tokens,
   };
 }
@@ -214,6 +227,7 @@ export async function me(userId: string) {
   return {
     user: publicUser(user),
     business: publicBusiness(user.business),
+    access: await sessionAccess(user.businessId),
   };
 }
 

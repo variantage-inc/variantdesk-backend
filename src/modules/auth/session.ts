@@ -1,5 +1,6 @@
 import { prisma } from '../../lib/prisma.js';
 import { newRefreshToken, signAccessToken } from '../../lib/tokens.js';
+import { accessFrom, type Access } from '../billing/access.js';
 
 export type Role = 'OWNER' | 'MEMBER';
 export type Platform = 'SUPERADMIN' | 'CUSTOMER';
@@ -56,6 +57,8 @@ type UserRow = {
   role: Role;
   platformRole: Platform;
   avatarUrl?: string | null;
+  passwordHash?: string | null;
+  googleId?: string | null;
 };
 
 /* What a user looks like to the client. Nothing else about the row leaves the
@@ -68,6 +71,12 @@ export const publicUser = (u: UserRow) => ({
   role: u.role,
   platformRole: u.platformRole,
   avatarUrl: u.avatarUrl ?? null,
+  /* Whether each way in exists, never the credential itself. Settings needs
+     this to decide between "change your password" and "set a password", which
+     is not the same question for somebody who arrived through Google and has
+     never had one. The hash itself does not leave the API. */
+  hasPassword: Boolean(u.passwordHash),
+  hasGoogle: Boolean(u.googleId),
 });
 
 type BusinessRow = {
@@ -92,3 +101,17 @@ export const publicBusiness = (b: BusinessRow) => ({
   idleTimeoutMinutes: b.idleTimeoutMinutes,
   idleWarningSeconds: b.idleWarningSeconds,
 });
+
+/* Whether this business may write to its books, sent with every session
+   response rather than fetched separately.
+
+   It costs one indexed lookup on a table with one row per business, and it
+   means the app shell can render the read only banner on the first paint. The
+   alternative, a second request after sign in, shows the customer a working
+   interface for a moment before telling them it is not.
+
+   This is a courtesy to the interface. The API checks the same thing again on
+   every write, in requireWriteAccess, because anything decided in a browser
+   can be edited in a browser. */
+export const sessionAccess = async (businessId: string): Promise<Access> =>
+  accessFrom(await prisma.subscription.findUnique({ where: { businessId } }));
