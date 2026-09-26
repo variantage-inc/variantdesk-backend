@@ -22,6 +22,12 @@ const schema = z.object({
      and in development the link is logged instead. */
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().default('onboarding@resend.dev'),
+
+  /* Continue with Google. Optional so the API boots without it; the routes
+     answer 503 rather than crashing when it is not configured. */
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_REDIRECT_URI: z.string().default('http://localhost:4000/api/auth/google/callback'),
 });
 
 const parsed = schema.safeParse(process.env);

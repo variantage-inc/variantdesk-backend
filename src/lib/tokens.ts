@@ -52,3 +52,35 @@ export function newLinkToken(): { raw: string; hash: string } {
   const raw = crypto.randomBytes(32).toString('base64url');
   return { raw, hash: hashToken(raw) };
 }
+
+/* A brand new Google user has an identity but no business, and we cannot make
+   one up: without a province there is no tax rate, and every invoice they ever
+   send would be wrong. So the identity is parked in a short lived token, the
+   user is asked for their business, and the account is created after that.
+
+   `purpose` keeps this token from being accepted anywhere an access token is,
+   even though both are signed with the same secret. */
+export type PendingSignup = {
+  purpose: 'google_signup';
+  googleId: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  avatarUrl?: string;
+};
+
+export function signPendingSignup(data: Omit<PendingSignup, 'purpose'>): string {
+  return jwt.sign({ ...data, purpose: 'google_signup' }, env.JWT_SECRET, {
+    expiresIn: '30m',
+    issuer: 'variantage',
+  });
+}
+
+export function verifyPendingSignup(token: string): PendingSignup | null {
+  try {
+    const claims = jwt.verify(token, env.JWT_SECRET, { issuer: 'variantage' }) as PendingSignup;
+    return claims.purpose === 'google_signup' ? claims : null;
+  } catch {
+    return null;
+  }
+}

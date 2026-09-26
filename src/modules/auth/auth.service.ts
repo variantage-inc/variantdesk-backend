@@ -1,63 +1,11 @@
 import { prisma } from '../../lib/prisma.js';
 import { hashPassword, verifyPassword, wastePasswordTime } from '../../lib/password.js';
-import { newLinkToken, newRefreshToken, hashToken, signAccessToken } from '../../lib/tokens.js';
+import { newLinkToken, hashToken } from '../../lib/tokens.js';
+import { issueSession, publicUser, type Ctx } from './session.js';
 import { ApiError } from '../../middleware/error.js';
 import type { SignupInput } from './auth.schemas.js';
 
-const REFRESH_DAYS = 30;
 const RESET_MINUTES = 60;
-
-type Ctx = { userAgent?: string; ip?: string };
-type Role = 'OWNER' | 'MEMBER';
-type Platform = 'SUPERADMIN' | 'CUSTOMER';
-
-/* One place builds a session, so the rules about lifetime and hashing are
-   stated once. The raw token is returned to be put in a cookie and is never
-   stored; only its hash reaches the database. */
-async function issueSession(
-  userId: string,
-  businessId: string,
-  role: Role,
-  platformRole: Platform,
-  ctx: Ctx,
-) {
-  const refresh = newRefreshToken();
-  const expiresAt = new Date(Date.now() + REFRESH_DAYS * 24 * 60 * 60 * 1000);
-
-  await prisma.session.create({
-    data: {
-      userId,
-      businessId,
-      refreshTokenHash: refresh.hash,
-      userAgent: ctx.userAgent?.slice(0, 300),
-      ipAddress: ctx.ip,
-      expiresAt,
-    },
-  });
-
-  return {
-    accessToken: signAccessToken({ userId, businessId, role, platformRole }),
-    refreshToken: refresh.raw,
-  };
-}
-
-type UserRow = {
-  id: string;
-  email: string;
-  firstName: string;
-  lastName: string;
-  role: Role;
-  platformRole: Platform;
-};
-
-const publicUser = (u: UserRow) => ({
-  id: u.id,
-  email: u.email,
-  firstName: u.firstName,
-  lastName: u.lastName,
-  role: u.role,
-  platformRole: u.platformRole,
-});
 
 /* Signing up creates a business and its first user together. In one
    transaction, because a user with no business cannot sign in and a business

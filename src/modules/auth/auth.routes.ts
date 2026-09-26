@@ -7,6 +7,7 @@ import { requireAuth } from '../../middleware/requireAuth.js';
 import { validate } from '../../middleware/validate.js';
 import { ApiError } from '../../middleware/error.js';
 import * as auth from './auth.service.js';
+import { googleRouter } from './google.routes.js';
 import {
   forgotPasswordSchema,
   loginSchema,
@@ -15,6 +16,8 @@ import {
 } from './auth.schemas.js';
 
 export const authRouter: Router = Router();
+
+authRouter.use('/google', googleRouter);
 
 const ctx = (req: { headers: Record<string, unknown>; ip?: string }) => ({
   userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : undefined,
