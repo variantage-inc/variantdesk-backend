@@ -8,11 +8,15 @@ export const REFRESH_COOKIE = 'vd_refresh';
 
 const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
 
+/* Secure requires HTTPS, which localhost is not, so it is off in development.
+   Except with SameSite=None, which browsers reject outright unless the cookie
+   is also Secure: there the flag is forced, whatever NODE_ENV says. */
+const secure = (): boolean => !isDev || env.COOKIE_SAMESITE === 'none';
+
 export function setRefreshCookie(res: Response, raw: string, remembered = true): void {
   res.cookie(REFRESH_COOKIE, raw, {
     httpOnly: true,
-    /* Secure requires HTTPS, which localhost is not, so it is off in dev only. */
-    secure: !isDev,
+    secure: secure(),
     sameSite: env.COOKIE_SAMESITE,
     path: '/api/auth',
     /* No maxAge makes this a session cookie, which the browser throws away when
@@ -26,7 +30,7 @@ export function setRefreshCookie(res: Response, raw: string, remembered = true):
 export function clearRefreshCookie(res: Response): void {
   res.clearCookie(REFRESH_COOKIE, {
     path: '/api/auth',
-    secure: !isDev,
+    secure: secure(),
     sameSite: env.COOKIE_SAMESITE,
   });
 }
