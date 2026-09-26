@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.env*.local
+*.log
+npm-debug.log*
+.DS_Store
+uploads/
+
+# Neon CLI link state, machine specific
+.neon
+
+# generated Prisma client, rebuilt by npm run db:generate
+src/generated/

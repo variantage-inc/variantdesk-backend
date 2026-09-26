@@ -1,0 +1,165 @@
+// =============================================================================
+// Variantage Finance: database schema
+//
+// Built on the seven decisions in docs/data-model.html. The four that shape
+// every model below, and must not be quietly undone:
+//
+//   · Money is stored as WHOLE CENTS in Int columns, never Decimal or Float.
+//     0.1 has no exact binary representation, and a tax total a cent out is a
+//     tax total that is wrong.
+//   · Tax is STORED, never recalculated. Each row keeps the rate that applied
+//     and the amount charged, so a rate change never rewrites history.
+//     Nova Scotia went 15% to 14% in 2025 and old invoices must still show 15%.
+//   · Nothing is truly deleted. `deletedAt` marks a row as removed. The CRA
+//     wants six years, and an invoice number must never be reissued.
+//   · Multi-tenant from day one. Every business-owned table carries businessId
+//     and every query is scoped to it.
+//
+// This file currently covers the Account & access group, which is what Phase 2
+// needs. The remaining groups are added in their own phases. See PLAN.md.
+// =============================================================================
+
+generator client {
+  // Prisma 7 generates into the project rather than into node_modules, so the
+  // client is visible, typed and committed-adjacent. `output` is required.
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  // Prisma 7 no longer takes the URL here. Migrations read it from
+  // prisma.config.ts, and the running client gets it through the pg adapter in
+  // src/lib/prisma.ts. One env var still drives both.
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------- enums ----
+
+enum BusinessType {
+  SOLE_PROPRIETOR
+  PARTNERSHIP
+  CORPORATION
+  CONTRACTOR
+}
+
+enum Currency {
+  CAD
+  USD
+  PKR
+}
+
+enum UserRole {
+  OWNER
+  ACCOUNTANT
+  STAFF
+}
+
+// ------------------------------------------------------------- business ----
+// The tenant. Everything else hangs off this row.
+model Business {
+  id           String       @id @default(cuid())
+  name         String
+  legalName    String?      @map("legal_name")
+  businessType BusinessType @default(SOLE_PROPRIETOR) @map("business_type")
+
+  // CRA identifiers. gstHstNumber is the 15-character registration
+  // (e.g. 123456789 RT0001) and is printed on every invoice. Without it the
+  // client can be refused their input tax credit.
+  businessNumber String? @map("business_number")
+  gstHstNumber   String? @map("gst_hst_number")
+  gstRegistered  Boolean @default(false) @map("gst_registered")
+
+  // Province drives the default tax rate, so it is not a free-text field.
+  addressLine1 String? @map("address_line1")
+  addressLine2 String? @map("address_line2")
+  city         String?
+  province     String  @default("ON")
+  postalCode   String? @map("postal_code")
+  country      String  @default("CA")
+
+  email   String?
+  phone   String?
+  website String?
+
+  currency     Currency @default(CAD)
+  dateFormat   String   @default("YYYY/MM/DD") @map("date_format")
+  fyStartMonth Int      @default(1) @map("fy_start_month")
+
+  // Invoice template, auto-filled on every new invoice so nothing is retyped.
+  invoicePrefix     String  @default("INV-") @map("invoice_prefix")
+  nextInvoiceNumber Int     @default(1) @map("next_invoice_number")
+  invoiceNumberPad  Int     @default(4) @map("invoice_number_pad")
+  paymentTermsDays  Int     @default(30) @map("payment_terms_days")
+  invoiceTerms      String? @map("invoice_terms")
+  invoiceFooter     String? @map("invoice_footer")
+  invoicePayTo      String? @map("invoice_pay_to")
+
+  logoKey String? @map("logo_key")
+
+  // Web only. The phone stays signed in until manual logout.
+  idleTimeoutMinutes Int @default(15) @map("idle_timeout_minutes")
+  idleWarningSeconds Int @default(60) @map("idle_warning_seconds")
+
+  users    User[]
+  sessions Session[]
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  @@map("business")
+}
+
+// ----------------------------------------------------------------- user ----
+model User {
+  id         String   @id @default(cuid())
+  businessId String   @map("business_id")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  firstName    String   @map("first_name")
+  lastName     String   @map("last_name")
+  role         UserRole @default(OWNER)
+
+  emailVerifiedAt DateTime? @map("email_verified_at")
+  lastLoginAt     DateTime? @map("last_login_at")
+
+  // Set when a reset is requested; the token itself is stored hashed and the
+  // link is good for one use inside 60 minutes.
+  resetTokenHash    String?   @map("reset_token_hash")
+  resetTokenExpires DateTime? @map("reset_token_expires")
+
+  sessions Session[]
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  @@index([businessId])
+  @@map("user")
+}
+
+// -------------------------------------------------------------- session ----
+// Drives the 15-minute idle logout on web. A refresh token is stored hashed so
+// a database leak cannot be replayed as a login.
+model Session {
+  id         String   @id @default(cuid())
+  businessId String   @map("business_id")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  userId     String   @map("user_id")
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  refreshTokenHash String   @unique @map("refresh_token_hash")
+  userAgent        String?  @map("user_agent")
+  ipAddress        String?  @map("ip_address")
+  lastSeenAt       DateTime @default(now()) @map("last_seen_at")
+  expiresAt        DateTime @map("expires_at")
+  revokedAt        DateTime? @map("revoked_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([businessId])
+  @@map("session")
+}
