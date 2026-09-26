@@ -37,6 +37,25 @@ const schema = z.object({
      you want at three in the morning when a model starts answering badly. */
   GEMINI_MODEL: z.string().optional(),
 
+  /* Neon Object Storage, where receipts live from Phase 8.
+
+     S3 compatible, so these are the AWS standard names and the AWS SDK reads
+     them from the environment without being told. Optional like everything
+     else here: the API boots without them and the receipt routes answer 503,
+     rather than the whole product refusing to start because nobody has made a
+     bucket yet.
+
+     The credentials are BRANCH SCOPED. These belong to `development`, and
+     production gets its own, which is the point of storage that branches with
+     the database: a development upload can never appear in production. */
+  AWS_ACCESS_KEY_ID: z.string().optional(),
+  AWS_SECRET_ACCESS_KEY: z.string().optional(),
+  AWS_ENDPOINT_URL_S3: z.string().optional(),
+  AWS_REGION: z.string().default('us-east-2'),
+  /* The bucket itself. Named rather than derived, so a second bucket later is
+     a setting and not a code change. */
+  STORAGE_BUCKET: z.string().default('receipts'),
+
   /* Stripe. All optional, so the API boots and the whole product works on its
      14 day trial without a single key. Billing routes answer 503 until the
      secret key and the two plan prices are present. */
