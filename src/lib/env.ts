@@ -84,6 +84,12 @@ const schema = z.object({
      *.vercel.app and *.up.railway.app, need `none`, and browsers accept `none`
      only over HTTPS. */
   COOKIE_SAMESITE: z.enum(['lax', 'strict', 'none']).default('lax'),
+
+  /* What this deployment is for. `staging` is a real server that shows the
+     product to the client before launch: it runs in production mode, but it
+     may use Stripe TEST keys and the Resend sandbox sender, because nobody on
+     it is paying real money or expecting real mail. `production` refuses both. */
+  APP_STAGE: z.enum(['production', 'staging']).default('production'),
 }).superRefine((e, ctx) => {
   /* Production refuses to boot on settings that only make sense locally. */
   if (e.NODE_ENV !== 'production') return;
@@ -97,10 +103,13 @@ const schema = z.object({
   if (e.STRIPE_SECRET_KEY && !e.STRIPE_WEBHOOK_SECRET) {
     fail('STRIPE_WEBHOOK_SECRET', 'is required when Stripe is on, or no payment is ever confirmed');
   }
-  if (e.STRIPE_SECRET_KEY?.startsWith('sk_test_')) {
-    fail('STRIPE_SECRET_KEY', 'is a test key, and production takes real payments');
+  if (e.APP_STAGE === 'production' && e.STRIPE_SECRET_KEY?.startsWith('sk_test_')) {
+    fail('STRIPE_SECRET_KEY', 'is a test key, and production takes real payments (APP_STAGE=staging allows it)');
   }
-  if (e.EMAIL_FROM.endsWith('@resend.dev')) {
+  if (e.APP_STAGE === 'staging' && e.STRIPE_SECRET_KEY?.startsWith('sk_live_')) {
+    fail('STRIPE_SECRET_KEY', 'is a LIVE key on a staging server, where nobody should pay real money');
+  }
+  if (e.APP_STAGE === 'production' && e.EMAIL_FROM.endsWith('@resend.dev')) {
     fail('EMAIL_FROM', 'is the Resend sandbox sender, which only reaches the account owner');
   }
 });
