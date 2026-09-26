@@ -44,6 +44,7 @@ async function main() {
       firstName: 'Sarah',
       lastName: 'Whitfield',
       role: 'OWNER',
+      platformRole: 'CUSTOMER',
       emailVerifiedAt: new Date(),
     },
   });

@@ -48,10 +48,17 @@ enum Currency {
   PKR
 }
 
-enum UserRole {
+// Inside one business. The owner pays and controls membership.
+enum BusinessRole {
   OWNER
-  ACCOUNTANT
-  STAFF
+  MEMBER
+}
+
+// Above tenancy. SUPERADMIN is Variantage staff and belongs to no business.
+// A customer can never grant it.
+enum PlatformRole {
+  SUPERADMIN
+  CUSTOMER
 }
 
 // ------------------------------------------------------------- business ----
@@ -118,9 +125,10 @@ model User {
 
   email        String   @unique
   passwordHash String   @map("password_hash")
-  firstName    String   @map("first_name")
-  lastName     String   @map("last_name")
-  role         UserRole @default(OWNER)
+  firstName    String       @map("first_name")
+  lastName     String       @map("last_name")
+  role         BusinessRole @default(OWNER)
+  platformRole PlatformRole @default(CUSTOMER) @map("platform_role")
 
   emailVerifiedAt DateTime? @map("email_verified_at")
   lastLoginAt     DateTime? @map("last_login_at")
