@@ -5,7 +5,9 @@ import { requireWriteAccess } from '../../middleware/requireWriteAccess.js';
 import { idempotent } from '../../middleware/idempotency.js';
 import { validate } from '../../middleware/validate.js';
 import * as transactions from './transactions.service.js';
+import * as historyView from './history.service.js';
 import {
+  activityQuerySchema,
   clientSchema,
   drawingSchema,
   expenseSchema,
@@ -162,11 +164,26 @@ transactionsRouter.get('/entries/:id', requireAuth, async (req, res, next) => {
   }
 });
 
-/* What this entry used to say. Only answerable because the ledger is append
-   only, and the reason it is worth being append only. */
+/* Every version this entry has had, what changed between them, and who
+   changed it. Only answerable because the ledger is append only, and the
+   reason it is worth being append only. */
 transactionsRouter.get('/entries/:id/history', requireAuth, async (req, res, next) => {
   try {
-    res.json({ history: await transactions.trail(req.auth!.businessId, param(req, 'id')) });
+    res.json(await historyView.versionsOf(req.auth!.businessId, param(req, 'id')));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/* The change log for a period: every correction and every removal.
+
+   The per entry view answers "why does this row say that". This answers the
+   other question, the one that is harder to chase down on your own: a total
+   moved and nobody knows why. */
+transactionsRouter.get('/activity', requireAuth, async (req, res, next) => {
+  try {
+    const q = activityQuerySchema.parse(req.query);
+    res.json(await historyView.activity(req.auth!.businessId, q));
   } catch (err) {
     next(err);
   }

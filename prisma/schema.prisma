@@ -231,7 +231,8 @@ model User {
   resetTokenHash    String?   @map("reset_token_hash")
   resetTokenExpires DateTime? @map("reset_token_expires")
 
-  sessions Session[]
+  sessions     Session[]
+  transactions Transaction[]
 
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
@@ -569,8 +570,11 @@ model Transaction {
   // three times leaves a chain of three.
   replacesId String? @map("replaces_id")
 
-  // Who typed it, kept for the audit trail on a shared account.
+  // Who typed it. A relation rather than a bare id, because on an account with
+  // three people the first question about a changed figure is who changed it,
+  // and the answer should not need a second query to find.
   createdById String   @map("created_by_id")
+  createdBy   User     @relation(fields: [createdById], references: [id])
   createdAt   DateTime @default(now()) @map("created_at")
 
   @@index([businessId, date])

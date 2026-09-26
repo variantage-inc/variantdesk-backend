@@ -284,25 +284,3 @@ export async function reverse(ctx: Ctx, id: string): Promise<void> {
     await tx.transaction.create({ data: reversalFor(original, ctx.userId, 'Removed') });
   });
 }
-
-/* The full history of one entry, including the corrections that replaced it.
-
-   This is what makes the append only ledger worth having rather than merely
-   correct: the customer can be shown what an entry used to say and when it
-   changed, which is the question an accountant asks and a soft delete cannot
-   answer. */
-export async function history(businessId: string, id: string) {
-  const chain: Transaction[] = [];
-  let cursor: string | null = id;
-
-  while (cursor) {
-    const row: Transaction | null = await prisma.transaction.findFirst({
-      where: { id: cursor, businessId },
-    });
-    if (!row) break;
-    chain.push(row);
-    cursor = row.replacesId;
-  }
-
-  return chain;
-}

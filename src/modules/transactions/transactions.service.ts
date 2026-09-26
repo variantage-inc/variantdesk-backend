@@ -2,7 +2,7 @@ import type { Prisma, TransactionType } from '../../generated/prisma/client.js';
 import { prisma } from '../../lib/prisma.js';
 import { ApiError } from '../../middleware/error.js';
 import { toCents } from '../../lib/money.js';
-import { liveEntries, amend, record, reverse, history, type EntryInput } from '../../lib/ledger.js';
+import { liveEntries, amend, record, reverse, type EntryInput } from '../../lib/ledger.js';
 import { taxFor } from '../../lib/tax.js';
 import { isUniqueViolation } from '../../lib/db-errors.js';
 import type { ListQuery } from './transactions.schemas.js';
@@ -255,22 +255,6 @@ export async function one(businessId: string, id: string) {
   });
   if (!row) throw new ApiError(404, 'That entry no longer exists.', 'not_found');
   return publicRow(row);
-}
-
-/* What this entry used to say, newest first. The append only ledger is what
-   makes this answerable at all. */
-export async function trail(businessId: string, id: string) {
-  const chain = await history(businessId, id);
-  return chain.map((t) => ({
-    id: t.id,
-    date: t.date.toISOString().slice(0, 10),
-    description: t.description,
-    subtotalCents: t.subtotalCents,
-    taxCents: t.taxCents,
-    totalCents: t.totalCents,
-    createdAt: t.createdAt.toISOString(),
-    current: t.id === id,
-  }));
 }
 
 /* -------------------------------------------------------------- clients --- */

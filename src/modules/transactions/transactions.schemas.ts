@@ -114,3 +114,12 @@ export const clientSchema = z.object({
   ),
   phone: optional(shortText('The phone number', 30)),
 });
+
+/* The change log takes the same period as the list beside it, so the two can
+   be opened together and agree about what "this month" means. */
+export const activityQuerySchema = z.object({
+  from: optionalIsoDate,
+  to: optionalIsoDate,
+  page: z.coerce.number().int().min(1).max(10_000).default(1),
+  perPage: z.coerce.number().int().min(1).max(100).default(30),
+});
