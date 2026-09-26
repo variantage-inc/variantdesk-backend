@@ -199,14 +199,27 @@ export async function startCheckout(
        the correct behaviour until Variantage is registered. */
     automatic_tax: { enabled: true },
     customer_update: { address: 'auto' },
-    success_url: `${env.APP_URL}${returnPath}?billing=done`,
-    cancel_url: `${env.APP_URL}${returnPath}?billing=cancelled`,
+    success_url: returnUrl(returnPath, 'done'),
+    cancel_url: returnUrl(returnPath, 'cancelled'),
   });
 
   if (!session.url) {
     throw new ApiError(502, 'Stripe did not return a checkout page. Try again.', 'no_checkout_url');
   }
   return { url: session.url };
+}
+
+/* The URL Stripe sends somebody back to.
+
+   The query goes BEFORE the fragment, which is the only order a browser reads
+   correctly. `/settings#billing` with `?billing=done` glued on the end gives
+   `/settings#billing?billing=done`, where the query sits inside the fragment
+   and stops being a query at all. The fragment has to survive either way,
+   because it is what puts the customer back on the billing tab rather than on
+   whichever tab Settings opens with. */
+function returnUrl(returnPath: string, outcome: 'done' | 'cancelled'): string {
+  const [path = '', fragment] = returnPath.split('#');
+  return `${env.APP_URL}${path}?billing=${outcome}${fragment ? `#${fragment}` : ''}`;
 }
 
 async function createCustomer(businessId: string, email: string): Promise<string> {

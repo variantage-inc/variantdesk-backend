@@ -69,10 +69,16 @@ billingRouter.put(
 /* Where to come back to after Stripe. Constrained to a path on our own site,
    because a full URL here would be an open redirect: anyone could send someone
    a checkout link that returns them to a page the attacker controls. */
+/* Where to send somebody back to once Stripe has finished with them.
+
+   A path on this site, and nothing else: no scheme, no host, no protocol
+   relative `//evil.example`, which is how a return URL becomes an open
+   redirect. The fragment IS allowed, because the settings screen chooses its
+   tab from it and the real call is `/settings#billing`. */
 const returnSchema = z.object({
   returnPath: z
     .string()
-    .regex(/^\/[A-Za-z0-9\-._~/]*$/, 'That is not a page on this site.')
+    .regex(/^\/[A-Za-z0-9\-._~/]*(#[A-Za-z0-9\-._~]*)?$/, 'That is not a page on this site.')
     .max(120)
     .default('/settings'),
 });
