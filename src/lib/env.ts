@@ -14,6 +14,14 @@ const schema = z.object({
   JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
   JWT_EXPIRES_IN: z.string().default('15m'),
   CORS_ORIGIN: z.string().default('http://localhost:3000'),
+
+  /* Where reset and invite links point. */
+  APP_URL: z.string().url().default('http://localhost:3000'),
+
+  /* Optional so the API still boots without it. Without a key nothing sends,
+     and in development the link is logged instead. */
+  RESEND_API_KEY: z.string().optional(),
+  EMAIL_FROM: z.string().default('onboarding@resend.dev'),
 });
 
 const parsed = schema.safeParse(process.env);

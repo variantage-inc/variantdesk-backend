@@ -32,6 +32,7 @@
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "pg": "^8.23.0",
+    "resend": "^6.26.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {

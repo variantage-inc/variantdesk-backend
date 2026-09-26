@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { isDev } from '../../lib/env.js';
+import { sendPasswordReset } from '../../lib/email.js';
 import { REFRESH_COOKIE, clearRefreshCookie, setRefreshCookie } from '../../lib/cookies.js';
 import { rateLimit } from '../../middleware/rateLimit.js';
 import { requireAuth } from '../../middleware/requireAuth.js';
@@ -97,10 +98,13 @@ authRouter.post(
     try {
       const { resetToken } = await auth.forgotPassword(req.body.email);
 
-      /* The token is never returned. Until Resend is wired up it is logged so
-         the flow can be tested locally, and only in development. */
-      if (isDev && resetToken) {
-        console.log(`[dev] password reset token for ${req.body.email}: ${resetToken}`);
+      if (resetToken) {
+        /* Not awaited. Sending takes a second or two, and how long this
+           endpoint takes to answer must not reveal whether the address exists. */
+        void sendPasswordReset(req.body.email, resetToken);
+        if (isDev) {
+          console.log(`[dev] reset token for ${req.body.email}: ${resetToken}`);
+        }
       }
 
       res.json({

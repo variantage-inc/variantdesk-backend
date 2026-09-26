@@ -120,6 +120,22 @@ export async function login(email: string, password: string, ctx: Ctx) {
     await wastePasswordTime(password);
     throw new ApiError(401, 'That email or password is not right.', 'bad_credentials');
   }
+
+  /* No password on the row means the account was created through Google.
+     Saying so reveals that the address is registered, which the generic
+     message above deliberately avoids. It is said anyway because signup
+     already returns a conflict on a taken email, so the fact leaks there
+     regardless, and leaving a Google user staring at "password is not right"
+     with no way forward costs more than it protects. */
+  if (!user.passwordHash) {
+    await wastePasswordTime(password);
+    throw new ApiError(
+      401,
+      'This account signs in with Google. Use Continue with Google instead.',
+      'use_google',
+    );
+  }
+
   if (!(await verifyPassword(password, user.passwordHash))) {
     throw new ApiError(401, 'That email or password is not right.', 'bad_credentials');
   }

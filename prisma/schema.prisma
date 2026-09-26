@@ -123,8 +123,17 @@ model User {
   businessId String   @map("business_id")
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 
-  email        String   @unique
-  passwordHash String   @map("password_hash")
+  email String @unique
+
+  /* Nullable because an account created through Google has no password. A user
+     can later set one, and a password user can later link Google, so the two
+     are not exclusive. */
+  passwordHash String? @map("password_hash")
+
+  /* Google's stable subject id, not the email. Google emails can change and be
+     reassigned; the subject id cannot. */
+  googleId  String? @unique @map("google_id")
+  avatarUrl String? @map("avatar_url")
   firstName    String       @map("first_name")
   lastName     String       @map("last_name")
   role         BusinessRole @default(OWNER)
