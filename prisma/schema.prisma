@@ -123,6 +123,20 @@ enum PaymentMethod {
   OTHER
 }
 
+// What has happened to something dictated out loud.
+//
+// A voice entry is a PROPOSAL, never money. It is parsed, stored as a draft,
+// and shown to the owner, and it only becomes a ledger row when a human has
+// looked at it and pressed Save. Nothing here is ever counted anywhere: the
+// figures on every screen come from the transaction table, and a draft that is
+// never confirmed simply expires unread.
+enum VoiceStatus {
+  DRAFT // parsed, waiting for a person to check it
+  CONFIRMED // a person approved it and it became a ledger entry
+  DISCARDED // a person threw it away
+  FAILED // nothing usable was in it, usually no amount
+}
+
 // A ledger row is written once and never touched again. An edit writes a
 // reversal and a replacement; a delete writes a reversal alone.
 enum LedgerKind {
@@ -199,6 +213,7 @@ model Business {
   transactions    Transaction[]
   invoices        Invoice[]
   invoicePayments InvoicePayment[]
+  voiceEntries    VoiceEntry[]
 
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
@@ -245,6 +260,7 @@ model User {
   transactions    Transaction[]
   invoices        Invoice[]        @relation("invoiceAuthor")
   invoicePayments InvoicePayment[] @relation("invoicePaymentAuthor")
+  voiceEntries    VoiceEntry[]     @relation("voiceAuthor")
 
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
@@ -438,6 +454,7 @@ model Category {
 
   vendors      Vendor[]
   transactions Transaction[]
+  voiceEntries VoiceEntry[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -464,6 +481,7 @@ model Vendor {
   category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
   transactions Transaction[]
+  voiceEntries VoiceEntry[]
 
   createdAt  DateTime  @default(now()) @map("created_at")
   updatedAt  DateTime  @updatedAt @map("updated_at")
@@ -505,6 +523,7 @@ model Client {
 
   transactions Transaction[]
   invoices     Invoice[]
+  voiceEntries VoiceEntry[]
 
   createdAt  DateTime  @default(now()) @map("created_at")
   updatedAt  DateTime  @updatedAt @map("updated_at")
@@ -591,6 +610,11 @@ model Transaction {
   reversesId String?      @unique @map("reverses_id")
   reverses   Transaction? @relation("reversal", fields: [reversesId], references: [id])
   reversal   Transaction? @relation("reversal")
+
+  // The dictated draft this entry came from, if it came from one. A back
+  // relation only: the draft points here, not the other way round, because an
+  // entry is money and a draft is a proposal that happened to precede it.
+  voiceEntry VoiceEntry?
 
   // On the ENTRY written by an edit, the entry it stands in for. Not unique
   // and not a constraint, because it is a history pointer: an entry corrected
@@ -801,4 +825,66 @@ model InvoicePayment {
   @@index([invoiceId])
   @@index([businessId])
   @@map("invoice_payment")
+}
+
+
+model VoiceEntry {
+  id         String   @id @default(cuid())
+  businessId String   @map("business_id")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  status VoiceStatus @default(DRAFT)
+
+  // What was actually said, as the model heard it. Kept because the owner is
+  // shown it next to the fields, and because "it recorded the wrong amount" is
+  // answerable only if the sentence is still there.
+  transcript String
+
+  // ---- what the model PROPOSED ----
+  //
+  // Typed columns rather than a JSON blob, so a proposal can be read and
+  // audited with the same tools as everything else. All nullable: a sentence
+  // with no amount in it produces a row with nothing but a transcript, which
+  // is the honest record of a failure.
+  kind        TransactionType?
+  amountCents Int?             @map("amount_cents")
+  taxMode     TaxMode?         @map("tax_mode")
+
+  // The names it heard, kept as spoken. They are matched against the business's
+  // own categories, vendors and clients where a match exists; where none does,
+  // the id stays null and the confirmation screen asks. Nothing is created from
+  // speech: a vendor nobody has ever entered is not invented here.
+  party       String?
+  description String?
+  entryDate   DateTime? @map("entry_date") @db.Date
+  purpose     String?
+
+  categoryId String?   @map("category_id")
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  vendorId   String?   @map("vendor_id")
+  vendor     Vendor?   @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  clientId   String?   @map("client_id")
+  client     Client?   @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  // Which fields were inferred rather than heard, and why, as { field: reason }.
+  // JSON because it is a note to a human rather than something queried, and
+  // because the set of fields it can cover changes with the prompt.
+  guesses Json?
+
+  // The model that answered, so a change in behaviour can be traced to a change
+  // in model rather than to a change in our code.
+  model String
+
+  // What it became, if anything. Unique: one draft, one entry.
+  transactionId String?      @unique @map("transaction_id")
+  transaction   Transaction? @relation(fields: [transactionId], references: [id])
+
+  createdById String   @map("created_by_id")
+  createdBy   User     @relation("voiceAuthor", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now()) @map("created_at")
+  settledAt   DateTime? @map("settled_at")
+
+  @@index([businessId, status])
+  @@index([businessId, createdAt])
+  @@map("voice_entry")
 }

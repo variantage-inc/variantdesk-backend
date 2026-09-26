@@ -446,6 +446,7 @@ async function wipe(): Promise<void> {
   /* In dependency order. Transactions reference categories, vendors and
      clients with ON DELETE RESTRICT, which is right for real data and means
      the rows have to come out from the inside. */
+  await prisma.voiceEntry.deleteMany({ where: { businessId: BUSINESS_ID } });
   await prisma.invoicePayment.deleteMany({ where: { businessId: BUSINESS_ID } });
   await prisma.transaction.deleteMany({ where: { businessId: BUSINESS_ID } });
   await prisma.invoice.deleteMany({ where: { businessId: BUSINESS_ID } });

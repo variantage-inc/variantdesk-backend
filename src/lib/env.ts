@@ -33,6 +33,9 @@ const schema = z.object({
      503 rather than crashing, the same way billing does. Server side only: it
      is never sent to the browser and the browser never calls Gemini. */
   GEMINI_API_KEY: z.string().optional(),
+  /* Pinned in lib/gemini.ts. This overrides it without a deploy, which is what
+     you want at three in the morning when a model starts answering badly. */
+  GEMINI_MODEL: z.string().optional(),
 
   /* Stripe. All optional, so the API boots and the whole product works on its
      14 day trial without a single key. Billing routes answer 503 until the

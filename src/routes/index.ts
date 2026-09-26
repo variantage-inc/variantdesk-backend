@@ -8,6 +8,7 @@ import { adminRouter } from '../modules/admin/admin.routes.js';
 import { transactionsRouter } from '../modules/transactions/transactions.routes.js';
 import { invoicesRouter } from '../modules/invoices/invoices.routes.js';
 import { reportingRouter } from '../modules/reporting/reporting.routes.js';
+import { voiceRouter } from '../modules/voice/voice.routes.js';
 
 export const api: Router = Router();
 
@@ -30,4 +31,9 @@ api.use('/', invoicesRouter);
 /* The dashboard, and the reports it will share its arithmetic with. */
 api.use('/', reportingRouter);
 
-/* Later phases add their routers here: receipts, voice. */
+/* Dictating an entry. Mounted at the root so the paths read as /api/voice,
+   and note that the clip arrives as a raw body: express.json never sees it,
+   because the route declares its own parser for audio content types. */
+api.use('/', voiceRouter);
+
+/* Later phases add their routers here: receipts. */
