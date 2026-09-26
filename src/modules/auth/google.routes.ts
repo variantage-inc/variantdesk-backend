@@ -6,7 +6,7 @@ import { setRefreshCookie } from '../../lib/cookies.js';
 import { rateLimit } from '../../middleware/rateLimit.js';
 import { validate } from '../../middleware/validate.js';
 import { ApiError } from '../../middleware/error.js';
-import { PROVINCES } from './auth.schemas.js';
+import { businessName, province } from '../../lib/validation.js';
 import { completeGoogleSignup, signInWithGoogle } from './google.service.js';
 
 export const googleRouter: Router = Router();
@@ -80,8 +80,8 @@ googleRouter.get('/callback', async (req, res) => {
 
 const completeSchema = z.object({
   token: z.string().min(1),
-  businessName: z.string().trim().min(1, 'Enter your business name.').max(120),
-  province: z.enum(PROVINCES, { message: 'Choose your province.' }),
+  businessName,
+  province,
 });
 
 /* Step three, and only for people new to Variantage. */

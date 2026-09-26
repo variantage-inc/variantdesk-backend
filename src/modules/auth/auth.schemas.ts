@@ -1,41 +1,32 @@
 import { z } from 'zod';
-
-/* The provinces the product supports. A code rather than free text, because
-   the province decides the tax rate and a typo would mean the wrong rate on
-   every invoice. */
-export const PROVINCES = [
-  'AB', 'BC', 'MB', 'NB', 'NL', 'NS', 'NT', 'NU', 'ON', 'PE', 'QC', 'SK', 'YT',
-] as const;
-
-const email = z
-  .string()
-  .trim()
-  .toLowerCase()
-  .min(1, 'Enter your email address.')
-  .email('That does not look like an email address. Check for a missing @ or a typo.');
-
-/* Ten characters, matching what the sign up screen tells the user. Length is
-   what actually makes a password hard to crack; forcing symbols mostly makes
-   people write them on a note by the monitor. */
-const password = z
-  .string()
-  .min(10, 'Passwords must be at least 10 characters long.')
-  .max(200, 'That password is too long.');
-
-const name = (label: string) =>
-  z.string().trim().min(1, `Enter your ${label}.`).max(80);
-
-export const signupSchema = z.object({
-  firstName: name('first name'),
-  lastName: name('last name'),
+import {
+  businessName,
   email,
   password,
-  businessName: z.string().trim().min(1, 'Enter your business name.').max(120),
-  province: z.enum(PROVINCES, { message: 'Choose your province.' }),
+  personName,
+  province,
+  PROVINCES,
+} from '../../lib/validation.js';
+
+/* Auth request shapes, built from the shared field rules in lib/validation.ts
+   so that a name means the same thing here as it will on every later screen. */
+
+export { PROVINCES };
+
+export const signupSchema = z.object({
+  firstName: personName('first name'),
+  lastName: personName('last name'),
+  email,
+  password,
+  businessName,
+  province,
 });
 
 export const loginSchema = z.object({
-  email,
+  /* Not the full email rule. Someone signing in has an account already, and
+     lecturing them about the format of an address they have used for a year
+     just gets in the way. A wrong address fails on the credentials instead. */
+  email: z.string().trim().toLowerCase().min(1, 'Enter your email address.'),
   password: z.string().min(1, 'Enter your password.'),
 });
 
