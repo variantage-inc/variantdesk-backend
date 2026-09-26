@@ -7,6 +7,7 @@ import { settingsRouter } from '../modules/settings/settings.routes.js';
 import { adminRouter } from '../modules/admin/admin.routes.js';
 import { transactionsRouter } from '../modules/transactions/transactions.routes.js';
 import { invoicesRouter } from '../modules/invoices/invoices.routes.js';
+import { reportingRouter } from '../modules/reporting/reporting.routes.js';
 
 export const api: Router = Router();
 
@@ -26,4 +27,7 @@ api.use('/', transactionsRouter);
    /api/clients and /api/invoices. */
 api.use('/', invoicesRouter);
 
-/* Later phases add their routers here: receipts, reports, voice. */
+/* The dashboard, and the reports it will share its arithmetic with. */
+api.use('/', reportingRouter);
+
+/* Later phases add their routers here: receipts, voice. */
