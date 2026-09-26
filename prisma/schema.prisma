@@ -93,6 +93,43 @@ enum CategoryKind {
   DRAWINGS
 }
 
+// What a row of money is. Owner drawings are their own type rather than a
+// category on an expense, because the difference is not a label: a drawing
+// must never reach net profit, an expense report, or an input tax credit.
+// Enforcing that at query level on a typed column is a rule the code cannot
+// forget; enforcing it by remembering to exclude a category is one it will.
+enum TransactionType {
+  INCOME
+  EXPENSE
+  DRAWING
+}
+
+// How the person typed the amount in. This is the single most common source of
+// wrong entries in small business books, which is why it is asked once, in
+// plain words, instead of being guessed.
+enum TaxMode {
+  ADD // the figure is before tax, so add it
+  INCLUSIVE // the figure already includes tax, so work it back out
+  NONE // no tax on this entry at all
+}
+
+enum PaymentMethod {
+  BANK_TRANSFER
+  E_TRANSFER
+  CHEQUE
+  CASH
+  CARD
+  PRE_AUTHORISED
+  OTHER
+}
+
+// A ledger row is written once and never touched again. An edit writes a
+// reversal and a replacement; a delete writes a reversal alone.
+enum LedgerKind {
+  ENTRY // something that happened
+  REVERSAL // the cancellation of an ENTRY, with the amounts negated
+}
+
 // ------------------------------------------------------------- business ----
 // The tenant. Everything else hangs off this row.
 model Business {
@@ -150,6 +187,8 @@ model Business {
   payments     Payment[]
   categories   Category[]
   vendors      Vendor[]
+  clients      Client[]
+  transactions Transaction[]
 
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
@@ -384,7 +423,8 @@ model Category {
   isSystem  Boolean @default(false) @map("is_system")
   sortOrder Int     @default(0) @map("sort_order")
 
-  vendors Vendor[]
+  vendors      Vendor[]
+  transactions Transaction[]
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -410,6 +450,8 @@ model Vendor {
   categoryId String?   @map("category_id")
   category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
+  transactions Transaction[]
+
   createdAt  DateTime  @default(now()) @map("created_at")
   updatedAt  DateTime  @updatedAt @map("updated_at")
   archivedAt DateTime? @map("archived_at")
@@ -418,4 +460,150 @@ model Vendor {
   @@index([businessId])
   @@index([categoryId])
   @@map("vendor")
+}
+
+// -------------------------------------------------------------- client ----
+// Who pays you. Deliberately thin at this stage: income needs somebody to
+// attribute a payment to, and the client screens, their terms and their
+// invoice history are Phase 6. Adding the table now rather than later is what
+// stops the income form being built twice.
+model Client {
+  id         String   @id @default(cuid())
+  businessId String   @map("business_id")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  name  String
+  email String?
+  phone String?
+
+  transactions Transaction[]
+
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  archivedAt DateTime? @map("archived_at")
+
+  @@unique([businessId, name])
+  @@index([businessId])
+  @@map("client")
+}
+
+// --------------------------------------------------------- transaction ----
+// The ledger. Every dollar in or out of the business is a row here, and it is
+// the core of the whole product.
+//
+// APPEND ONLY. Nothing in this table is ever UPDATEd or DELETEd once written,
+// which is rule 5 of the financial architecture and is not negotiable:
+//
+//   editing an entry   writes a REVERSAL of the original, then a new ENTRY
+//   deleting an entry  writes a REVERSAL and nothing else
+//
+// So the sum of every row in a period is always the true figure, whatever
+// happened along the way, and "what did this look like in March" is a question
+// the database can still answer in six years. The only place rows are written
+// is lib/ledger.ts; a Prisma write to this table from anywhere else is a bug.
+//
+// The live entries are the ones with no reversal pointing at them, which is
+// why `reversal` is a one to one back relation rather than a flag: setting a
+// flag would be an UPDATE, and there are none.
+model Transaction {
+  id         String   @id @default(cuid())
+  businessId String   @map("business_id")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  type TransactionType
+  kind LedgerKind      @default(ENTRY)
+
+  // The day the money actually moved, which is not the day it was typed in.
+  // Date only: a time of day on a bookkeeping entry is noise that shifts
+  // across timezones and puts entries in the wrong month.
+  date        DateTime @db.Date
+  description String
+
+  categoryId String?   @map("category_id")
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  // Expenses only. Who the money went to.
+  vendorId String? @map("vendor_id")
+  vendor   Vendor? @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+
+  // Income only. Who the money came from.
+  clientId String? @map("client_id")
+  client   Client? @relation(fields: [clientId], references: [id], onDelete: Restrict)
+
+  // ---- money, in whole cents, and all three stored ----
+  //
+  // The total is stored rather than derived from the other two. It is the
+  // figure that appeared on the receipt or landed in the bank, and it is what
+  // the customer will check against their statement. Deriving it would mean a
+  // rounding rule change one day silently rewrites history.
+  subtotalCents Int @map("subtotal_cents")
+  taxCents      Int @map("tax_cents")
+  totalCents    Int @map("total_cents")
+
+  taxMode TaxMode @map("tax_mode")
+
+  // The rate that applied ON THE DAY, in basis points, and the words that went
+  // with it. Copied onto the row and never read back from the province table,
+  // because Nova Scotia went from 15% to 14% in 2025 and a 2024 entry must
+  // still read 15%.
+  taxRateBp Int    @map("tax_rate_bp")
+  taxLabel  String @map("tax_label")
+
+  paymentMethod PaymentMethod? @map("payment_method")
+  reference     String?
+
+  // Drawings only, and required for one. 150 characters, so that this still
+  // makes sense to an accountant at year end.
+  purpose String?
+
+  // ---- the audit trail ----
+  //
+  // On a REVERSAL, the ENTRY it cancels. Unique, so one entry can be reversed
+  // exactly once and a double click cannot cancel the same money twice.
+  reversesId String?      @unique @map("reverses_id")
+  reverses   Transaction? @relation("reversal", fields: [reversesId], references: [id])
+  reversal   Transaction? @relation("reversal")
+
+  // On the ENTRY written by an edit, the entry it stands in for. Not unique
+  // and not a constraint, because it is a history pointer: an entry corrected
+  // three times leaves a chain of three.
+  replacesId String? @map("replaces_id")
+
+  // Who typed it, kept for the audit trail on a shared account.
+  createdById String   @map("created_by_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([businessId, date])
+  @@index([businessId, type, date])
+  @@index([categoryId])
+  @@index([vendorId])
+  @@index([clientId])
+  @@map("transaction")
+}
+
+// ----------------------------------------------------- idempotency key ----
+// Rule 4 of the financial architecture: a write that arrives twice must not
+// post the money twice.
+//
+// The client sends X-Idempotency-Key. The first request stores its own answer
+// against that key; a repeat gets the stored answer back, byte for byte,
+// without touching the ledger. That covers a double clicked button, a retried
+// request on a flaky connection, and a voice entry confirmed twice, which are
+// the three ways this actually happens.
+model IdempotencyKey {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  key        String
+
+  // Stored so the same key cannot be replayed against a different endpoint and
+  // hand back an answer that was never about this request.
+  endpoint String
+  status   Int
+  response Json
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([businessId, key])
+  @@index([createdAt])
+  @@map("idempotency_key")
 }
