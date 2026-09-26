@@ -3,6 +3,7 @@ import { hashPassword, verifyPassword, wastePasswordTime } from '../../lib/passw
 import { newLinkToken, hashToken } from '../../lib/tokens.js';
 import { issueSession, publicUser, type Ctx } from './session.js';
 import { ApiError } from '../../middleware/error.js';
+import { isUniqueViolation } from '../../lib/db-errors.js';
 import type { SignupInput } from './auth.schemas.js';
 
 const RESET_MINUTES = 60;
@@ -18,27 +19,40 @@ export async function signup(input: SignupInput, ctx: Ctx) {
 
   const passwordHash = await hashPassword(input.password);
 
-  const created = await prisma.$transaction(async (tx) => {
-    const business = await tx.business.create({
-      data: {
-        name: input.businessName,
-        legalName: input.businessName,
-        province: input.province,
-      },
+  /* The check above is not enough on its own. Two signups for the same address
+     arriving together both pass it, and then one loses on the unique index. It
+     is a double clicked button on a slow connection, and without this it comes
+     back as a 500. The database constraint is the real guard; the check above
+     just gives a tidier answer in the ordinary case. */
+  let created;
+  try {
+    created = await prisma.$transaction(async (tx) => {
+      const business = await tx.business.create({
+        data: {
+          name: input.businessName,
+          legalName: input.businessName,
+          province: input.province,
+        },
+      });
+      const user = await tx.user.create({
+        data: {
+          businessId: business.id,
+          email: input.email,
+          passwordHash,
+          firstName: input.firstName,
+          lastName: input.lastName,
+          role: 'OWNER',
+          platformRole: 'CUSTOMER',
+        },
+      });
+      return { user, business };
     });
-    const user = await tx.user.create({
-      data: {
-        businessId: business.id,
-        email: input.email,
-        passwordHash,
-        firstName: input.firstName,
-        lastName: input.lastName,
-        role: 'OWNER',
-        platformRole: 'CUSTOMER',
-      },
-    });
-    return { user, business };
-  });
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      throw new ApiError(409, 'An account already exists for that email address.', 'email_taken');
+    }
+    throw err;
+  }
 
   const tokens = await issueSession(
     created.user.id,

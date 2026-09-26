@@ -2,6 +2,7 @@ import { prisma } from '../../lib/prisma.js';
 import type { GoogleIdentity } from '../../lib/google.js';
 import { signPendingSignup, verifyPendingSignup } from '../../lib/tokens.js';
 import { ApiError } from '../../middleware/error.js';
+import { isUniqueViolation } from '../../lib/db-errors.js';
 import { issueSession, publicUser } from './session.js';
 
 type Ctx = { userAgent?: string; ip?: string };
@@ -22,7 +23,9 @@ export async function signInWithGoogle(
   identity: GoogleIdentity,
   ctx: Ctx,
 ): Promise<GoogleOutcome> {
-  const byGoogleId = await prisma.user.findUnique({ where: { googleId: identity.googleId } });
+  const byGoogleId = await prisma.user.findUnique({
+    where: { googleId: identity.googleId },
+  });
 
   if (byGoogleId && !byGoogleId.deletedAt) {
     const session = await issueSession(
@@ -39,7 +42,9 @@ export async function signInWithGoogle(
     return { kind: 'signed_in', refreshToken: session.refreshToken };
   }
 
-  const byEmail = await prisma.user.findUnique({ where: { email: identity.email } });
+  const byEmail = await prisma.user.findUnique({
+    where: { email: identity.email },
+  });
 
   if (byEmail && !byEmail.deletedAt) {
     if (!identity.emailVerified) {
@@ -88,7 +93,11 @@ export async function completeGoogleSignup(
 ) {
   const pending = verifyPendingSignup(pendingToken);
   if (!pending) {
-    throw new ApiError(400, 'That sign up link has expired. Start again.', 'pending_expired');
+    throw new ApiError(
+      400,
+      'That sign up link has expired. Start again.',
+      'pending_expired',
+    );
   }
 
   /* Between the redirect and this call, someone could have signed up with the
@@ -97,29 +106,46 @@ export async function completeGoogleSignup(
     where: { OR: [{ email: pending.email }, { googleId: pending.googleId }] },
   });
   if (taken) {
-    throw new ApiError(409, 'An account already exists for that email address.', 'email_taken');
+    throw new ApiError(
+      409,
+      'An account already exists for that email address.',
+      'email_taken',
+    );
   }
 
-  const created = await prisma.$transaction(async (tx) => {
-    const business = await tx.business.create({
-      data: { name: businessName, legalName: businessName, province },
+  let created;
+  try {
+    created = await prisma.$transaction(async (tx) => {
+      const business = await tx.business.create({
+        data: { name: businessName, legalName: businessName, province },
+      });
+      const user = await tx.user.create({
+        data: {
+          businessId: business.id,
+          email: pending.email,
+          googleId: pending.googleId,
+          avatarUrl: pending.avatarUrl,
+          firstName: pending.firstName,
+          lastName: pending.lastName,
+          role: 'OWNER',
+          platformRole: 'CUSTOMER',
+          /* Google vouched for the address, so there is nothing left to verify. */
+          emailVerifiedAt: new Date(),
+        },
+      });
+      return { user, business };
     });
-    const user = await tx.user.create({
-      data: {
-        businessId: business.id,
-        email: pending.email,
-        googleId: pending.googleId,
-        avatarUrl: pending.avatarUrl,
-        firstName: pending.firstName,
-        lastName: pending.lastName,
-        role: 'OWNER',
-        platformRole: 'CUSTOMER',
-        /* Google vouched for the address, so there is nothing left to verify. */
-        emailVerifiedAt: new Date(),
-      },
-    });
-    return { user, business };
-  });
+  } catch (err) {
+    /* Same race as the password signup: the check above can pass twice. */
+    if (isUniqueViolation(err)) {
+      throw new ApiError(
+        409,
+        'An account already exists for that email address.',
+        'email_taken',
+      );
+    }
+    throw err;
+  }
 
   const session = await issueSession(
     created.user.id,
