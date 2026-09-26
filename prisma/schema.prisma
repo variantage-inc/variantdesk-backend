@@ -130,6 +130,14 @@ enum LedgerKind {
   REVERSAL // the cancellation of an ENTRY, with the amounts negated
 }
 
+// How a discount was expressed when it was typed. The money that comes off is
+// always stored in cents; this only exists so the edit form can show the
+// customer the same control they used, rather than a converted figure.
+enum DiscountMode {
+  AMOUNT
+  PERCENT
+}
+
 // ------------------------------------------------------------- business ----
 // The tenant. Everything else hangs off this row.
 model Business {
@@ -180,15 +188,17 @@ model Business {
   idleTimeoutMinutes Int @default(15) @map("idle_timeout_minutes")
   idleWarningSeconds Int @default(60) @map("idle_warning_seconds")
 
-  users        User[]
-  sessions     Session[]
-  subscription Subscription?
-  invites      Invite[]
-  payments     Payment[]
-  categories   Category[]
-  vendors      Vendor[]
-  clients      Client[]
-  transactions Transaction[]
+  users           User[]
+  sessions        Session[]
+  subscription    Subscription?
+  invites         Invite[]
+  payments        Payment[]
+  categories      Category[]
+  vendors         Vendor[]
+  clients         Client[]
+  transactions    Transaction[]
+  invoices        Invoice[]
+  invoicePayments InvoicePayment[]
 
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
@@ -231,8 +241,10 @@ model User {
   resetTokenHash    String?   @map("reset_token_hash")
   resetTokenExpires DateTime? @map("reset_token_expires")
 
-  sessions     Session[]
-  transactions Transaction[]
+  sessions        Session[]
+  transactions    Transaction[]
+  invoices        Invoice[]        @relation("invoiceAuthor")
+  invoicePayments InvoicePayment[] @relation("invoicePaymentAuthor")
 
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
@@ -473,11 +485,26 @@ model Client {
   businessId String   @map("business_id")
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 
-  name  String
-  email String?
-  phone String?
+  name        String
+  contactName String? @map("contact_name")
+  email       String?
+  phone       String?
+
+  // The billing address, which the CRA wants on any invoice of $30 or more.
+  addressLine1 String? @map("address_line1")
+  addressLine2 String? @map("address_line2")
+  city         String?
+  province     String?
+  postalCode   String? @map("postal_code")
+
+  // Overrides the business default when this client has been given their own
+  // terms. Null means use the template.
+  paymentTermsDays Int? @map("payment_terms_days")
+
+  notes String?
 
   transactions Transaction[]
+  invoices     Invoice[]
 
   createdAt  DateTime  @default(now()) @map("created_at")
   updatedAt  DateTime  @updatedAt @map("updated_at")
@@ -570,6 +597,15 @@ model Transaction {
   // three times leaves a chain of three.
   replacesId String? @map("replaces_id")
 
+  // Set when this income entry was posted by a payment on an invoice. It is
+  // the single link between the two, in both directions, so there is no
+  // denormalised invoice id to drift.
+  //
+  // An entry with one of these cannot be edited or removed from the income
+  // screen. Changing it there would move the money without moving the invoice
+  // balance, which is exactly the double counting the link exists to prevent.
+  invoicePayment InvoicePayment?
+
   // Who typed it. A relation rather than a bare id, because on an account with
   // three people the first question about a changed figure is who changed it,
   // and the answer should not need a second query to find.
@@ -610,4 +646,159 @@ model IdempotencyKey {
   @@unique([businessId, key])
   @@index([createdAt])
   @@map("idempotency_key")
+}
+
+// ------------------------------------------------------------- invoice ----
+// A document, not a view over current settings.
+//
+// The seller's name, address and registration number are COPIED onto the
+// invoice when it is issued, along with the terms, the footer and the tax
+// rate. Rendering it from today's settings would mean a business that moved
+// premises silently reprinting last year's invoices with the new address, and
+// the copy the client is holding would stop matching ours.
+//
+// Status is NEVER stored. It is worked out from the payments and the due date
+// every time it is asked for, so the pill, the totals, the client's balance
+// and the dashboard cannot disagree about the same invoice.
+model Invoice {
+  id         String   @id @default(cuid())
+  businessId String   @map("business_id")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  clientId   String   @map("client_id")
+  client     Client   @relation(fields: [clientId], references: [id], onDelete: Restrict)
+
+  // The formatted number as printed, and the plain integer behind it. Both,
+  // because the format can change and the sequence cannot: an invoice number
+  // is never reissued, and the unique index below is what enforces that.
+  number      String
+  numberValue Int    @map("number_value")
+
+  issueDate        DateTime @map("issue_date") @db.Date
+  dueDate          DateTime @map("due_date") @db.Date
+  paymentTermsDays Int      @map("payment_terms_days")
+
+  // ---- copied from the business at issue ----
+  sellerName    String  @map("seller_name")
+  sellerAddress String? @map("seller_address")
+  sellerEmail   String? @map("seller_email")
+  sellerPhone   String? @map("seller_phone")
+  gstHstNumber  String? @map("gst_hst_number")
+
+  // ---- copied from the client at issue ----
+  billToName    String  @map("bill_to_name")
+  billToContact String? @map("bill_to_contact")
+  billToAddress String? @map("bill_to_address")
+
+  invoiceTerms  String? @map("invoice_terms")
+  invoiceFooter String? @map("invoice_footer")
+  invoicePayTo  String? @map("invoice_pay_to")
+
+  // ---- money, whole cents ----
+  //
+  // The discount comes off BEFORE tax, which is how the CRA expects it and
+  // what the mockup says on screen. taxableCents is what the tax was actually
+  // charged on, stored rather than derived so the arithmetic on the document
+  // can always be checked line by line.
+  subtotalCents Int          @map("subtotal_cents")
+  discountMode  DiscountMode @default(AMOUNT) @map("discount_mode")
+  // Cents when the mode is AMOUNT, basis points when it is PERCENT. What the
+  // customer typed, kept so the edit form can show it back to them.
+  discountValue Int          @default(0) @map("discount_value")
+  discountCents Int          @default(0) @map("discount_cents")
+  taxableCents  Int          @map("taxable_cents")
+  taxCents      Int          @map("tax_cents")
+  totalCents    Int          @map("total_cents")
+
+  // Off for a genuinely zero rated or exempt sale. On by default, with the
+  // rate coming from the province rather than being asked for.
+  chargeTax Boolean @default(true) @map("charge_tax")
+  taxRateBp Int     @map("tax_rate_bp")
+  taxLabel  String  @map("tax_label")
+
+  notes String?
+
+  // Draft until this is set. A draft is not a debt the client owes, so it is
+  // excluded from what they are billed and from what the business is owed.
+  sentAt DateTime? @map("sent_at")
+
+  // Removed, without leaving the sequence. An invoice number is never
+  // reissued, so the row has to stay even when the invoice does not.
+  voidedAt DateTime? @map("voided_at")
+
+  items    InvoiceItem[]
+  payments InvoicePayment[]
+
+  // Who raised it, for the audit trail on a shared account.
+  createdById String   @map("created_by_id")
+  createdBy   User     @relation("invoiceAuthor", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // One number per business, ever. This is the constraint that makes the
+  // sequence unbroken rather than merely intended to be.
+  @@unique([businessId, numberValue])
+  @@index([businessId, issueDate])
+  @@index([clientId])
+  @@map("invoice")
+}
+
+// -------------------------------------------------------- invoice item ----
+model InvoiceItem {
+  id        String  @id @default(cuid())
+  invoiceId String  @map("invoice_id")
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  description String
+
+  // Thousandths, so 7.5 hours is 7500. An integer for the same reason money is
+  // an integer: 0.1 has no exact binary form, and a quantity that drifts makes
+  // a line total that does not match its own rate.
+  quantityMilli  Int @map("quantity_milli")
+  unitPriceCents Int @map("unit_price_cents")
+  // Rounded once, here, and stored. Recomputing it on read would let a change
+  // to the rounding rule rewrite a document somebody is already holding.
+  lineTotalCents Int @map("line_total_cents")
+
+  sortOrder Int @default(0) @map("sort_order")
+
+  @@index([invoiceId])
+  @@map("invoice_item")
+}
+
+// ----------------------------------------------------- invoice payment ----
+// The link between an invoice and the income entry its payment posted.
+//
+// Recording a payment writes exactly one INCOME transaction through the ledger
+// service and joins it here. That is what stops the same money being counted
+// twice: there is no second place to record it, and the entry it created
+// cannot be edited from the income screen.
+//
+// There is no voided flag. Whether a payment still counts is decided by
+// whether its ledger entry has been reversed, so there is one truth rather
+// than two that can disagree.
+model InvoicePayment {
+  id         String   @id @default(cuid())
+  businessId String   @map("business_id")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  invoiceId  String   @map("invoice_id")
+  invoice    Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  date        DateTime       @db.Date
+  amountCents Int            @map("amount_cents")
+  method      PaymentMethod?
+  reference   String?
+
+  // Unique: one payment, one ledger entry, in both directions.
+  transactionId String      @unique @map("transaction_id")
+  transaction   Transaction @relation(fields: [transactionId], references: [id])
+
+  // Who recorded it. Shown on the payment history, because on a shared account
+  // "who marked this as paid" is a question that gets asked.
+  createdById String   @map("created_by_id")
+  createdBy   User     @relation("invoicePaymentAuthor", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([invoiceId])
+  @@index([businessId])
+  @@map("invoice_payment")
 }

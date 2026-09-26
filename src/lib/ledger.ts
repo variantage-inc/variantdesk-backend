@@ -104,6 +104,15 @@ export type EntryInput = {
   paymentMethod?: Prisma.TransactionCreateInput['paymentMethod'];
   reference?: string | null;
   purpose?: string | null;
+
+  /* An explicit split, for the one caller that already knows it: a payment on
+     an invoice carries the tax the INVOICE charged, not today's provincial
+     rate. A business that has since moved provinces must not have its old
+     payments retagged, and the parts of a split payment have to add back up to
+     the whole invoice including the cent that rounding would otherwise lose.
+
+     Everything else leaves this alone and lets the rate follow the province. */
+  split?: TaxSplit;
 };
 
 type Ctx = { businessId: string; userId: string; province: string };
@@ -176,7 +185,7 @@ async function validate(
 }
 
 function rowFor(ctx: Ctx, input: EntryInput): Prisma.TransactionUncheckedCreateInput {
-  const split = splitTax(input.amountCents, input.taxMode, ctx.province);
+  const split = input.split ?? splitTax(input.amountCents, input.taxMode, ctx.province);
 
   return {
     businessId: ctx.businessId,
@@ -200,11 +209,26 @@ function rowFor(ctx: Ctx, input: EntryInput): Prisma.TransactionUncheckedCreateI
   };
 }
 
+/* Two forms of every write.
+
+   The `In` form takes a transaction client, so a caller that is already inside
+   one can post through the ledger without nesting. That is what lets invoicing
+   write a payment and its income entry together, atomically, while still
+   obeying rule 1: every money write goes through this file.
+
+   The plain form opens its own transaction, which is what a caller with
+   nothing else to do wants. */
+export async function recordIn(
+  tx: Prisma.TransactionClient,
+  ctx: Ctx,
+  input: EntryInput,
+): Promise<Transaction> {
+  await validate(tx, ctx, input);
+  return tx.transaction.create({ data: rowFor(ctx, input) });
+}
+
 export async function record(ctx: Ctx, input: EntryInput): Promise<Transaction> {
-  return prisma.$transaction(async (tx) => {
-    await validate(tx, ctx, input);
-    return tx.transaction.create({ data: rowFor(ctx, input) });
-  });
+  return prisma.$transaction((tx) => recordIn(tx, ctx, input));
 }
 
 /* Finds the one live entry with this id, or explains why there is not one.
@@ -217,10 +241,14 @@ async function liveEntry(
   tx: Prisma.TransactionClient,
   businessId: string,
   id: string,
+  allowInvoiceLinked = false,
 ): Promise<Transaction> {
   const entry = await tx.transaction.findFirst({
     where: { id, businessId, kind: 'ENTRY' },
-    include: { reversal: { select: { id: true } } },
+    include: {
+      reversal: { select: { id: true } },
+      invoicePayment: { select: { id: true } },
+    },
   });
 
   if (!entry) throw new ApiError(404, 'That entry no longer exists.', 'not_found');
@@ -231,6 +259,22 @@ async function liveEntry(
       'already_reversed',
     );
   }
+
+  /* An entry posted by a payment on an invoice belongs to that invoice.
+
+     Changing it here would move the money without moving the invoice balance,
+     and the two would disagree from then on. That is precisely the double
+     counting the link between them exists to prevent, so the answer is to send
+     the person to the invoice rather than to let them do it in the wrong
+     place. The caller may pass `allowInvoiceLinked` when it IS the invoice. */
+  if (entry.invoicePayment && !allowInvoiceLinked) {
+    throw new ApiError(
+      409,
+      'This came from a payment on an invoice. Change it on the invoice, so the balance moves with it.',
+      'entry_from_invoice',
+    );
+  }
+
   return entry;
 }
 
@@ -278,9 +322,17 @@ export async function amend(ctx: Ctx, id: string, input: EntryInput): Promise<Tr
   });
 }
 
+export async function reverseIn(
+  tx: Prisma.TransactionClient,
+  ctx: Ctx,
+  id: string,
+  why = 'Removed',
+  allowInvoiceLinked = false,
+): Promise<void> {
+  const original = await liveEntry(tx, ctx.businessId, id, allowInvoiceLinked);
+  await tx.transaction.create({ data: reversalFor(original, ctx.userId, why) });
+}
+
 export async function reverse(ctx: Ctx, id: string): Promise<void> {
-  await prisma.$transaction(async (tx) => {
-    const original = await liveEntry(tx, ctx.businessId, id);
-    await tx.transaction.create({ data: reversalFor(original, ctx.userId, 'Removed') });
-  });
+  await prisma.$transaction((tx) => reverseIn(tx, ctx, id));
 }

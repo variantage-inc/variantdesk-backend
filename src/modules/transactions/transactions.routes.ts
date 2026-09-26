@@ -8,7 +8,6 @@ import * as transactions from './transactions.service.js';
 import * as historyView from './history.service.js';
 import {
   activityQuerySchema,
-  clientSchema,
   drawingSchema,
   expenseSchema,
   incomeSchema,
@@ -205,29 +204,6 @@ transactionsRouter.delete('/entries/:id', ...write, async (req, res, next) => {
   }
 });
 
-/* -------------------------------------------------------------- clients --- */
-
-/* Just enough for the income form to attribute a payment to somebody. The
-   client screens, their terms and their invoice history are Phase 6. */
-transactionsRouter.get('/clients', requireAuth, async (req, res, next) => {
-  try {
-    res.json({ clients: await transactions.listClients(req.auth!.businessId) });
-  } catch (err) {
-    next(err);
-  }
-});
-
-transactionsRouter.post(
-  '/clients',
-  requireAuth,
-  requireWriteAccess,
-  validate(clientSchema),
-  async (req, res, next) => {
-    try {
-      const client = await transactions.createClient(req.auth!.businessId, req.body);
-      res.status(201).json({ client, clients: await transactions.listClients(req.auth!.businessId) });
-    } catch (err) {
-      next(err);
-    }
-  },
-);
+/* Clients live in the invoicing module now. The income form still needs to
+   attribute a payment to somebody, and it reads the same GET /api/clients that
+   the clients screen does, so there is one list rather than two. */

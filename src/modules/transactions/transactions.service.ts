@@ -4,7 +4,6 @@ import { ApiError } from '../../middleware/error.js';
 import { toCents } from '../../lib/money.js';
 import { liveEntries, amend, record, reverse, type EntryInput } from '../../lib/ledger.js';
 import { taxFor } from '../../lib/tax.js';
-import { isUniqueViolation } from '../../lib/db-errors.js';
 import type { ListQuery } from './transactions.schemas.js';
 
 /* Reading and writing money.
@@ -76,6 +75,10 @@ const shape = {
      reach a reversed one, which is deliberate: an old link and the history
      view both need to read it. What it must not do is look current. */
   reversal: { select: { id: true } },
+  /* The invoice this income was posted by, if any. An entry with one of these
+     belongs to that invoice and cannot be edited here: changing it would move
+     the money without moving the invoice balance. */
+  invoicePayment: { select: { invoice: { select: { id: true, number: true } } } },
 } satisfies Prisma.TransactionInclude;
 
 type Row = Prisma.TransactionGetPayload<{ include: typeof shape }>;
@@ -104,6 +107,10 @@ const publicRow = (t: Row) => ({
      because "this figure has changed since it was entered" is the kind of
      thing an accountant wants to see rather than discover. */
   amended: t.replacesId !== null,
+  /* Set when this entry was posted by a payment on an invoice. The screen
+     shows it as coming from there and offers a link instead of an edit
+     button, because the invoice is where it can actually be changed. */
+  fromInvoice: t.invoicePayment?.invoice ?? null,
   /* This row has been corrected or removed since it was written, so it is no
      longer part of the books. It stays readable because the ledger is append
      only, and saying so is the difference between history and a stale form. */
@@ -174,7 +181,25 @@ async function summarise(
 
   if (type === 'INCOME') {
     const income = await sumFor('INCOME');
-    return { income, expense: null, drawing: null, entries: income.count };
+
+    /* How much of that income was posted by a payment on an invoice rather
+       than typed in by hand. Worth showing on its own, because those entries
+       are the ones nobody has to remember to record, and a customer who can
+       see the figure trusts that the two halves of the product are joined. */
+    const fromInvoices = await prisma.transaction.aggregate({
+      where: { ...whereFor(businessId, type, q), type: 'INCOME', invoicePayment: { isNot: null } },
+      _sum: { totalCents: true },
+      _count: true,
+    });
+
+    return {
+      income,
+      expense: null,
+      drawing: null,
+      entries: income.count,
+      fromInvoicesCents: fromInvoices._sum.totalCents ?? 0,
+      fromInvoicesCount: fromInvoices._count,
+    };
   }
 
   /* Expenses and drawings are summed separately even when both are on screen,
@@ -186,6 +211,8 @@ async function summarise(
     expense,
     drawing,
     entries: expense.count + drawing.count,
+    fromInvoicesCents: 0,
+    fromInvoicesCount: 0,
   };
 }
 
@@ -255,32 +282,4 @@ export async function one(businessId: string, id: string) {
   });
   if (!row) throw new ApiError(404, 'That entry no longer exists.', 'not_found');
   return publicRow(row);
-}
-
-/* -------------------------------------------------------------- clients --- */
-
-export async function listClients(businessId: string) {
-  const clients = await prisma.client.findMany({
-    where: { businessId, archivedAt: null },
-    orderBy: { name: 'asc' },
-    select: { id: true, name: true, email: true, phone: true },
-  });
-  return clients;
-}
-
-export async function createClient(
-  businessId: string,
-  input: { name: string; email: string | null; phone: string | null },
-) {
-  try {
-    return await prisma.client.create({
-      data: { businessId, ...input },
-      select: { id: true, name: true, email: true, phone: true },
-    });
-  } catch (err) {
-    if (isUniqueViolation(err)) {
-      throw new ApiError(409, 'You already have a client with that name.', 'duplicate');
-    }
-    throw err;
-  }
 }

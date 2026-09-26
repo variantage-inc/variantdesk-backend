@@ -6,6 +6,7 @@ import { teamRouter } from '../modules/team/team.routes.js';
 import { settingsRouter } from '../modules/settings/settings.routes.js';
 import { adminRouter } from '../modules/admin/admin.routes.js';
 import { transactionsRouter } from '../modules/transactions/transactions.routes.js';
+import { invoicesRouter } from '../modules/invoices/invoices.routes.js';
 
 export const api: Router = Router();
 
@@ -21,4 +22,8 @@ api.use('/admin', adminRouter);
    which is what the screens are called. */
 api.use('/', transactionsRouter);
 
-/* Later phases add their routers here: invoices, receipts, reports, voice. */
+/* Clients and invoicing. Also mounted at the root, so the paths read as
+   /api/clients and /api/invoices. */
+api.use('/', invoicesRouter);
+
+/* Later phases add their routers here: receipts, reports, voice. */
