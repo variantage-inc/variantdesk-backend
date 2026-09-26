@@ -29,6 +29,11 @@ const schema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   GOOGLE_REDIRECT_URI: z.string().default('http://localhost:4000/api/auth/google/callback'),
 
+  /* Voice entry. Optional so the API boots without it; the voice routes answer
+     503 rather than crashing, the same way billing does. Server side only: it
+     is never sent to the browser and the browser never calls Gemini. */
+  GEMINI_API_KEY: z.string().optional(),
+
   /* Stripe. All optional, so the API boots and the whole product works on its
      14 day trial without a single key. Billing routes answer 503 until the
      secret key and the two plan prices are present. */
