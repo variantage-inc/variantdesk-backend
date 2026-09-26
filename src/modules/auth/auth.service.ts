@@ -8,6 +8,19 @@ import type { SignupInput } from './auth.schemas.js';
 
 const RESET_MINUTES = 60;
 
+/* How long after a token is rotated a second use of it is treated as innocent.
+
+   Rotation plus reuse detection is the right design, but taken literally it
+   punishes ordinary behaviour: two open tabs, a refreshed page, a retried
+   request on a flaky connection. All of those present the previous token a
+   moment after it was replaced, and revoking every session for that would log
+   people out constantly.
+
+   A genuine stolen token is used later than this, from somewhere else, long
+   after the legitimate client has moved on. So inside the window it is a race
+   and we issue a new session; outside it, it is theft and every session goes. */
+const REUSE_GRACE_MS = 30_000;
+
 /* Signing up creates a business and its first user together. In one
    transaction, because a user with no business cannot sign in and a business
    with no user cannot be reached: either both rows exist or neither does. */
@@ -132,11 +145,19 @@ export async function refresh(rawToken: string, ctx: Ctx) {
   if (!session) throw new ApiError(401, 'Please sign in again.', 'invalid_refresh');
 
   if (session.revokedAt) {
-    await prisma.session.updateMany({
-      where: { userId: session.userId, revokedAt: null },
-      data: { revokedAt: new Date() },
-    });
-    throw new ApiError(401, 'Please sign in again.', 'refresh_reused');
+    const sinceRevoked = Date.now() - session.revokedAt.getTime();
+
+    if (sinceRevoked > REUSE_GRACE_MS) {
+      /* Long after the token was replaced. We cannot tell which side is the
+         attacker, so end everything and make them both sign in again. */
+      await prisma.session.updateMany({
+        where: { userId: session.userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      throw new ApiError(401, 'Please sign in again.', 'refresh_reused');
+    }
+    /* Inside the window: a second tab or a retry. Fall through and issue a
+       new session, exactly as a normal refresh would. */
   }
 
   if (session.expiresAt <= new Date()) {
