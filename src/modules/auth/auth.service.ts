@@ -82,7 +82,12 @@ export async function signup(input: SignupInput, ctx: Ctx) {
   };
 }
 
-export async function login(email: string, password: string, ctx: Ctx) {
+export async function login(
+  email: string,
+  password: string,
+  ctx: Ctx,
+  remembered = true,
+) {
   const user = await prisma.user.findUnique({
     where: { email },
     include: { business: true },
@@ -123,6 +128,7 @@ export async function login(email: string, password: string, ctx: Ctx) {
     user.role,
     user.platformRole,
     ctx,
+    remembered,
   );
 
   return {
@@ -171,12 +177,15 @@ export async function refresh(rawToken: string, ctx: Ctx) {
     data: { revokedAt: new Date() },
   });
 
+  /* The original choice travels with the session. Without this, every refresh
+     would silently promote a shared computer to a month long login. */
   const tokens = await issueSession(
     user.id,
     user.businessId,
     user.role,
     user.platformRole,
     ctx,
+    session.remembered,
   );
 
   return {

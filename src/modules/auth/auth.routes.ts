@@ -30,10 +30,16 @@ const ctx = (req: { headers: Record<string, unknown>; ip?: string }) => ({
    could read it. */
 function respondWithSession(
   res: Parameters<typeof setRefreshCookie>[0],
-  result: { refreshToken: string; accessToken: string; user: unknown; business: unknown },
+  result: {
+    refreshToken: string;
+    accessToken: string;
+    user: unknown;
+    business: unknown;
+    remembered?: boolean;
+  },
   status = 200,
 ) {
-  setRefreshCookie(res, result.refreshToken);
+  setRefreshCookie(res, result.refreshToken, result.remembered ?? true);
   res.status(status).json({
     accessToken: result.accessToken,
     user: result.user,
@@ -57,8 +63,8 @@ authRouter.post('/signup', signupLimit, validate(signupSchema), async (req, res,
 
 authRouter.post('/login', loginLimit, validate(loginSchema), async (req, res, next) => {
   try {
-    const { email, password } = req.body;
-    respondWithSession(res, await auth.login(email, password, ctx(req)));
+    const { email, password, rememberMe } = req.body;
+    respondWithSession(res, await auth.login(email, password, ctx(req), rememberMe));
   } catch (err) {
     next(err);
   }

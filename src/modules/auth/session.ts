@@ -5,7 +5,14 @@ export type Role = 'OWNER' | 'MEMBER';
 export type Platform = 'SUPERADMIN' | 'CUSTOMER';
 export type Ctx = { userAgent?: string; ip?: string };
 
-const REFRESH_DAYS = 30;
+/* Two lifetimes, and the difference is the point of the checkbox.
+
+   Remembered: a month, in a cookie that survives the browser closing.
+   Not remembered: a day, in a session cookie that dies with the window. That
+   is what someone on a shared or public machine is asking for when they
+   untick it. */
+const REMEMBERED_DAYS = 30;
+const SESSION_DAYS = 1;
 
 /* One place builds a session, whether the user arrived by password or by
    Google, so the rules about lifetime and hashing are stated once and cannot
@@ -17,8 +24,10 @@ export async function issueSession(
   role: Role,
   platformRole: Platform,
   ctx: Ctx,
-): Promise<{ accessToken: string; refreshToken: string }> {
+  remembered = true,
+): Promise<{ accessToken: string; refreshToken: string; remembered: boolean }> {
   const refresh = newRefreshToken();
+  const days = remembered ? REMEMBERED_DAYS : SESSION_DAYS;
 
   await prisma.session.create({
     data: {
@@ -27,13 +36,15 @@ export async function issueSession(
       refreshTokenHash: refresh.hash,
       userAgent: ctx.userAgent?.slice(0, 300),
       ipAddress: ctx.ip,
-      expiresAt: new Date(Date.now() + REFRESH_DAYS * 24 * 60 * 60 * 1000),
+      remembered,
+      expiresAt: new Date(Date.now() + days * 24 * 60 * 60 * 1000),
     },
   });
 
   return {
     accessToken: signAccessToken({ userId, businessId, role, platformRole }),
     refreshToken: refresh.raw,
+    remembered,
   };
 }
 

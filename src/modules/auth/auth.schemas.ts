@@ -28,6 +28,9 @@ export const loginSchema = z.object({
      just gets in the way. A wrong address fails on the credentials instead. */
   email: z.string().trim().toLowerCase().min(1, 'Enter your email address.'),
   password: z.string().min(1, 'Enter your password.'),
+  /* "Keep me signed in". Defaults to true so an older client that does not
+     send it behaves as the screen already promised. */
+  rememberMe: z.boolean().optional().default(true),
 });
 
 export const forgotPasswordSchema = z.object({ email });

@@ -168,6 +168,12 @@ model Session {
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   refreshTokenHash String   @unique @map("refresh_token_hash")
+
+  /* Whether the person ticked "keep me signed in".
+     Stored on the session, not worked out from the expiry date, so a refresh
+     carries the original choice forward instead of quietly upgrading a shared
+     computer to a month long session. */
+  remembered Boolean @default(true)
   userAgent        String?  @map("user_agent")
   ipAddress        String?  @map("ip_address")
   lastSeenAt       DateTime @default(now()) @map("last_seen_at")
