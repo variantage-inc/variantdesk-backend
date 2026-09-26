@@ -3,7 +3,7 @@ import type { GoogleIdentity } from '../../lib/google.js';
 import { signPendingSignup, verifyPendingSignup } from '../../lib/tokens.js';
 import { ApiError } from '../../middleware/error.js';
 import { isUniqueViolation } from '../../lib/db-errors.js';
-import { issueSession, publicUser } from './session.js';
+import { issueSession, publicBusiness, publicUser } from './session.js';
 
 type Ctx = { userAgent?: string; ip?: string };
 
@@ -157,7 +157,7 @@ export async function completeGoogleSignup(
 
   return {
     user: publicUser(created.user),
-    business: { id: created.business.id, name: created.business.name },
+    business: publicBusiness(created.business),
     ...session,
   };
 }

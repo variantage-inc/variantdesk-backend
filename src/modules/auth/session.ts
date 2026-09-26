@@ -69,3 +69,26 @@ export const publicUser = (u: UserRow) => ({
   platformRole: u.platformRole,
   avatarUrl: u.avatarUrl ?? null,
 });
+
+type BusinessRow = {
+  id: string;
+  name: string;
+  province: string;
+  currency: string;
+  idleTimeoutMinutes: number;
+  idleWarningSeconds: number;
+};
+
+/* What a business looks like to the client.
+
+   The idle timeout values travel with every session, not just with /me, because
+   the browser has to start counting the moment someone signs in. They are
+   settings, not secrets. */
+export const publicBusiness = (b: BusinessRow) => ({
+  id: b.id,
+  name: b.name,
+  province: b.province,
+  currency: b.currency,
+  idleTimeoutMinutes: b.idleTimeoutMinutes,
+  idleWarningSeconds: b.idleWarningSeconds,
+});

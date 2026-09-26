@@ -1,7 +1,7 @@
 import { prisma } from '../../lib/prisma.js';
 import { hashPassword, verifyPassword, wastePasswordTime } from '../../lib/password.js';
 import { newLinkToken, hashToken } from '../../lib/tokens.js';
-import { issueSession, publicUser, type Ctx } from './session.js';
+import { issueSession, publicBusiness, publicUser, type Ctx } from './session.js';
 import { ApiError } from '../../middleware/error.js';
 import { isUniqueViolation } from '../../lib/db-errors.js';
 import type { SignupInput } from './auth.schemas.js';
@@ -77,7 +77,7 @@ export async function signup(input: SignupInput, ctx: Ctx) {
 
   return {
     user: publicUser(created.user),
-    business: { id: created.business.id, name: created.business.name },
+    business: publicBusiness(created.business),
     ...tokens,
   };
 }
@@ -133,7 +133,7 @@ export async function login(
 
   return {
     user: publicUser(user),
-    business: { id: user.business.id, name: user.business.name },
+    business: publicBusiness(user.business),
     ...tokens,
   };
 }
@@ -190,7 +190,7 @@ export async function refresh(rawToken: string, ctx: Ctx) {
 
   return {
     user: publicUser(user),
-    business: { id: user.business.id, name: user.business.name },
+    business: publicBusiness(user.business),
     ...tokens,
   };
 }
@@ -213,14 +213,7 @@ export async function me(userId: string) {
   }
   return {
     user: publicUser(user),
-    business: {
-      id: user.business.id,
-      name: user.business.name,
-      province: user.business.province,
-      currency: user.business.currency,
-      idleTimeoutMinutes: user.business.idleTimeoutMinutes,
-      idleWarningSeconds: user.business.idleWarningSeconds,
-    },
+    business: publicBusiness(user.business),
   };
 }
 
