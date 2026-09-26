@@ -318,7 +318,9 @@ export async function one(businessId: string, id: string): Promise<PublicInvoice
 
 /* ---------------------------------------------------------------- writes --- */
 
-const addressOf = (b: Business): string | null =>
+/* Exported because the reports print the same seller block on their header,
+   and two ways of laying out one address is one too many. */
+export const addressOf = (b: Business): string | null =>
   [b.addressLine1, b.addressLine2, [b.city, b.province, b.postalCode].filter(Boolean).join(' ')]
     .filter(Boolean)
     .join('\n') || null;

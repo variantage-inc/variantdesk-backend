@@ -2,14 +2,18 @@ import type { Prisma, TransactionType } from '../../generated/prisma/client.js';
 import { prisma } from '../../lib/prisma.js';
 import { liveEntries } from '../../lib/ledger.js';
 import { taxFor } from '../../lib/tax.js';
-import { publicInvoice } from '../invoices/invoices.service.js';
+import { publicInvoice, type InvoiceStatus } from '../invoices/invoices.service.js';
 
 /* The derivation.
 
-   Every figure the dashboard shows, and every figure the reports will show in
-   Phase 9, is worked out here. One function, several callers, which is the
-   only way the two can be guaranteed to agree: a second copy of this
-   arithmetic somewhere else is a second answer waiting to be different.
+   Every figure the dashboard shows, and every figure the seven reports show,
+   is worked out here. One function, several callers, which is the only way
+   the two can be guaranteed to agree: a second copy of this arithmetic
+   somewhere else is a second answer waiting to be different.
+
+   `modules/reporting/reports.ts` lays the figures out; it does not work any of
+   them out. Everything it prints comes from `derive`, `monthsBetween` or
+   `invoiceLedger` below.
 
    Nothing on the dashboard is stored. Net profit, tax owed and what is left in
    the business are all computed from the ledger rows every time they are
@@ -149,7 +153,10 @@ async function byCategory(businessId: string, period: Period) {
       type: 'EXPENSE',
       date: { gte: period.from, lte: period.to },
     },
-    _sum: { subtotalCents: true },
+    /* The tax as well as the amount, because the expense report claims an
+       input tax credit per category and that credit is the sum of what was
+       charged on each receipt, not 13% of a rounded category total. */
+    _sum: { subtotalCents: true, taxCents: true },
     _count: true,
   });
 
@@ -167,6 +174,7 @@ async function byCategory(businessId: string, period: Period) {
       id: r.categoryId,
       name: r.categoryId ? (nameOf.get(r.categoryId) ?? 'Uncategorised') : 'Uncategorised',
       cents: r._sum.subtotalCents ?? 0,
+      taxCents: r._sum.taxCents ?? 0,
       count: r._count,
       /* Basis points of the total, so the bar widths are exact rather than
          each one rounded to a percent and adding up to 99. */
@@ -180,11 +188,40 @@ async function byCategory(businessId: string, period: Period) {
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-/* Twelve months ending with the month the period ends in, so the chosen period
-   always has context either side of it rather than sitting alone. */
-async function monthly(businessId: string, period: Period) {
-  const end = new Date(Date.UTC(period.to.getUTCFullYear(), period.to.getUTCMonth() + 1, 0));
-  const start = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() - 11, 1));
+export type MonthRow = {
+  key: string;
+  label: string;
+  year: number;
+  from: string;
+  to: string;
+  incomeCents: number;
+  incomeTaxCents: number;
+  expensesCents: number;
+  expensesTaxCents: number;
+  drawingsCents: number;
+};
+
+/* Month by month, between any two dates.
+
+   Two callers with different questions. The dashboard asks for the twelve
+   months ending with the period, so the chosen period has context either side
+   of it rather than sitting alone. A report asks for the months the period
+   actually covers, because a table headed "month by month" that printed four
+   months the reader did not choose would not add up to the total beneath it.
+
+   One function either way, so the two can never disagree about what a month
+   contains. */
+export async function monthsBetween(
+  businessId: string,
+  first: Date,
+  last: Date,
+): Promise<MonthRow[]> {
+  const start = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), 1));
+  const end = new Date(Date.UTC(last.getUTCFullYear(), last.getUTCMonth() + 1, 0));
+  const count =
+    (end.getUTCFullYear() - start.getUTCFullYear()) * 12 +
+    (end.getUTCMonth() - start.getUTCMonth()) +
+    1;
 
   /* Grouped by exact date and type, then rolled up to months here.
 
@@ -195,31 +232,24 @@ async function monthly(businessId: string, period: Period) {
   const rows = await prisma.transaction.groupBy({
     by: ['date', 'type'],
     where: { ...liveEntries(businessId), date: { gte: start, lte: end } },
-    _sum: { subtotalCents: true, totalCents: true },
+    _sum: { subtotalCents: true, taxCents: true, totalCents: true },
   });
 
-  const months: {
-    key: string;
-    label: string;
-    year: number;
-    from: string;
-    to: string;
-    incomeCents: number;
-    expensesCents: number;
-    drawingsCents: number;
-  }[] = [];
+  const months: MonthRow[] = [];
 
-  for (let i = 0; i < 12; i += 1) {
-    const first = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + i, 1));
-    const last = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0));
+  for (let i = 0; i < count; i += 1) {
+    const monthStart = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + i, 1));
+    const monthEnd = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 0));
     months.push({
-      key: iso(first).slice(0, 7),
-      label: MONTH_NAMES[first.getUTCMonth()]!,
-      year: first.getUTCFullYear(),
-      from: iso(first),
-      to: iso(last),
+      key: iso(monthStart).slice(0, 7),
+      label: MONTH_NAMES[monthStart.getUTCMonth()]!,
+      year: monthStart.getUTCFullYear(),
+      from: iso(monthStart),
+      to: iso(monthEnd),
       incomeCents: 0,
+      incomeTaxCents: 0,
       expensesCents: 0,
+      expensesTaxCents: 0,
       drawingsCents: 0,
     });
   }
@@ -233,13 +263,27 @@ async function monthly(businessId: string, period: Period) {
     /* Income and expenses are compared BEFORE tax, because that is what the
        business earned and spent. Drawings have no tax at all, so the total is
        the figure. */
-    if (row.type === 'INCOME') month.incomeCents += row._sum.subtotalCents ?? 0;
-    else if (row.type === 'EXPENSE') month.expensesCents += row._sum.subtotalCents ?? 0;
-    else month.drawingsCents += row._sum.totalCents ?? 0;
+    if (row.type === 'INCOME') {
+      month.incomeCents += row._sum.subtotalCents ?? 0;
+      month.incomeTaxCents += row._sum.taxCents ?? 0;
+    } else if (row.type === 'EXPENSE') {
+      month.expensesCents += row._sum.subtotalCents ?? 0;
+      month.expensesTaxCents += row._sum.taxCents ?? 0;
+    } else {
+      month.drawingsCents += row._sum.totalCents ?? 0;
+    }
   }
 
   return months;
 }
+
+/* The twelve months the dashboard chart shows. */
+const monthly = (businessId: string, period: Period): Promise<MonthRow[]> =>
+  monthsBetween(
+    businessId,
+    new Date(Date.UTC(period.to.getUTCFullYear(), period.to.getUTCMonth() - 11, 1)),
+    period.to,
+  );
 
 /* ------------------------------------------------------------- invoicing --- */
 
@@ -290,6 +334,67 @@ async function invoicePosition(businessId: string) {
       })),
   };
 }
+
+/* Every invoice, and what they add up to.
+
+   The invoice report is deliberately NOT scoped to the chosen period. An
+   invoice raised in June and still unpaid in September is money the business
+   is owed today, and a date range would hide exactly the debts that matter
+   most. So this is a position, like the dashboard's owed figure, and the
+   report says so on its face.
+
+   Status comes from `statusOf` in the invoice service, through `publicInvoice`,
+   because a second opinion about whether something is overdue is a second
+   answer waiting to disagree with the invoice list. */
+export async function invoiceLedger(businessId: string) {
+  const rows = await prisma.invoice.findMany({
+    where: { businessId, voidedAt: null },
+    include: invoiceShape,
+    orderBy: [{ numberValue: 'desc' }],
+  });
+
+  const all = rows.map(publicInvoice);
+  /* A draft is a document nobody has been sent. It is not a debt, so it is out
+     of what has been billed and out of what is owed, and shown on its own. */
+  const issued = all.filter((i) => i.status !== 'draft');
+  const open = issued.filter((i) => i.status !== 'paid');
+  const overdue = issued.filter((i) => i.status === 'overdue');
+  const drafts = all.filter((i) => i.status === 'draft');
+
+  const sum = (list: typeof all, pick: (i: (typeof all)[number]) => number): number =>
+    list.reduce((n, i) => n + pick(i), 0);
+
+  const STATUSES: InvoiceStatus[] = ['draft', 'sent', 'part', 'overdue', 'paid'];
+
+  return {
+    all,
+    issued,
+    /* Oldest debt first, which is the order somebody chasing payment works in. */
+    open: [...open].sort((a, b) => a.dueDate.localeCompare(b.dueDate)),
+    drafts,
+    byStatus: STATUSES.map((status) => {
+      const list = all.filter((i) => i.status === status);
+      return {
+        status,
+        count: list.length,
+        totalCents: sum(list, (i) => i.totalCents),
+        paidCents: sum(list, (i) => i.paidCents),
+        /* A paid invoice has no balance to chase and a draft is not a debt, so
+           neither contributes to the outstanding column. */
+        outstandingCents:
+          status === 'draft' || status === 'paid' ? 0 : sum(list, (i) => i.balanceCents),
+      };
+    }).filter((g) => g.count > 0),
+    billedCents: sum(issued, (i) => i.totalCents),
+    receivedCents: sum(issued, (i) => i.paidCents),
+    outstandingCents: sum(open, (i) => i.balanceCents),
+    overdueCents: sum(overdue, (i) => i.balanceCents),
+    overdueCount: overdue.length,
+    draftCents: sum(drafts, (i) => i.totalCents),
+  };
+}
+
+export type InvoiceLedger = Awaited<ReturnType<typeof invoiceLedger>>;
 
 /* ---------------------------------------------------------- recent entries --- */
 
