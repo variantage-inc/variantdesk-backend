@@ -64,11 +64,45 @@ const schema = z.object({
      production. Without it a webhook cannot be verified, and an unverified
      webhook is an unauthenticated stranger telling us someone has paid. */
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
+  /* Events from the businesses' own connected accounts (invoice payments). In
+     production a Connect endpoint in the dashboard has its own signing secret;
+     the Stripe CLI signs both kinds with STRIPE_WEBHOOK_SECRET, so in
+     development this stays empty. */
+  STRIPE_CONNECT_WEBHOOK_SECRET: z.string().optional(),
   /* Price ids, not amounts. Stripe owns what is charged; lib/plans.ts only
      holds what the customer is shown. */
   STRIPE_PRICE_ESSENTIAL: z.string().optional(),
   STRIPE_PRICE_SOLUTIONS_360: z.string().optional(),
   STRIPE_PRICE_EXTRA_USER: z.string().optional(),
+
+  /* Error reporting. Optional: without it errors go to the log only. */
+  SENTRY_DSN: z.string().url().optional(),
+
+  /* The refresh cookie. `lax` works when the web app and the API share a
+     parent domain (app.variantage.com and api.variantage.com), which is the
+     deployment this is built for. Two unrelated domains, such as the default
+     *.vercel.app and *.up.railway.app, need `none`, and browsers accept `none`
+     only over HTTPS. */
+  COOKIE_SAMESITE: z.enum(['lax', 'strict', 'none']).default('lax'),
+}).superRefine((e, ctx) => {
+  /* Production refuses to boot on settings that only make sense locally. */
+  if (e.NODE_ENV !== 'production') return;
+  const fail = (path: string, message: string) =>
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
+  if (!e.APP_URL.startsWith('https://')) fail('APP_URL', 'must be https in production');
+  if (/localhost|127\.0\.0\.1/.test(e.CORS_ORIGIN)) fail('CORS_ORIGIN', 'still points at localhost');
+  if (e.GOOGLE_CLIENT_ID && /localhost/.test(e.GOOGLE_REDIRECT_URI)) {
+    fail('GOOGLE_REDIRECT_URI', 'still points at localhost');
+  }
+  if (e.STRIPE_SECRET_KEY && !e.STRIPE_WEBHOOK_SECRET) {
+    fail('STRIPE_WEBHOOK_SECRET', 'is required when Stripe is on, or no payment is ever confirmed');
+  }
+  if (e.STRIPE_SECRET_KEY?.startsWith('sk_test_')) {
+    fail('STRIPE_SECRET_KEY', 'is a test key, and production takes real payments');
+  }
+  if (e.EMAIL_FROM.endsWith('@resend.dev')) {
+    fail('EMAIL_FROM', 'is the Resend sandbox sender, which only reaches the account owner');
+  }
 });
 
 const parsed = schema.safeParse(process.env);

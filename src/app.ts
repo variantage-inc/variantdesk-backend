@@ -8,6 +8,7 @@ import { corsOrigins } from './lib/cookies.js';
 import { api } from './routes/index.js';
 import { handleStripeWebhook } from './modules/billing/webhook.js';
 import { errorHandler, notFound } from './middleware/error.js';
+import { requestLog } from './middleware/requestLog.js';
 
 export function createApp() {
   const app = express();
@@ -17,13 +18,16 @@ export function createApp() {
      Without this req.ip is the load balancer, and rate limiting would treat
      every user in the world as the same person. */
   app.set('trust proxy', 1);
+  /* First, so every log line and every error carries the same request id,
+     including the Stripe webhook below. */
+  app.use(requestLog);
   app.use(helmet());
   /* The browser sends cookies for the refresh token, so the origin has to be
      named explicitly. A wildcard is not allowed with credentials. */
   /* Content-Disposition is exposed so a download fetched from the browser can
      read the file name it was sent with, rather than inventing one. */
   app.use(
-    cors({ origin: corsOrigins(), credentials: true, exposedHeaders: ['Content-Disposition'] }),
+    cors({ origin: corsOrigins(), credentials: true, exposedHeaders: ['Content-Disposition', 'X-Request-Id'] }),
   );
   /* The Stripe webhook, and it has to be here rather than with the other
      routes.

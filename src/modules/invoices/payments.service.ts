@@ -36,10 +36,21 @@ export type PaymentInput = {
   reference?: string | null;
 };
 
+/* Set when the money arrived by card through the public invoice link. The
+   payment still comes through `record`, like one typed into the drawer: a card
+   payment is a second way for a payment to ARRIVE, not a second way for income
+   to exist. */
+export type CardDetails = {
+  paymentIntentId: string;
+  chargeId: string | null;
+  feeCents: number | null;
+};
+
 export async function record(
   ctx: Ctx,
   invoiceId: string,
   input: PaymentInput,
+  card?: CardDetails,
 ): Promise<PublicInvoice> {
   const amountCents = toCents(input.amount);
   if (amountCents <= 0) {
@@ -72,7 +83,12 @@ export async function record(
     /* Overpayment is refused rather than absorbed. A credit balance is a
        different thing with different accounting, and quietly swallowing the
        difference would hide a typo in the amount. */
-    if (amountCents > balance) {
+    /* Except for a card payment: that money has already left the client's
+       account, and refusing to record it would lose it. It can only overpay
+       when somebody also recorded a payment by hand while the client was on
+       the Stripe page, and then the invoice shows the overpayment so it can be
+       refunded, rather than the books quietly disagreeing with the bank. */
+    if (amountCents > balance && !card) {
       throw new ApiError(
         400,
         `That is more than is owed. The balance is ${(balance / 100).toFixed(2)}.`,
@@ -119,8 +135,18 @@ export async function record(
         reference: input.reference ?? null,
         transactionId: entry.id,
         createdById: ctx.userId,
+        stripePaymentIntentId: card?.paymentIntentId ?? null,
+        stripeChargeId: card?.chargeId ?? null,
+        stripeFeeCents: card?.feeCents ?? null,
       },
     });
+
+    if (card) {
+      await tx.invoice.update({
+        where: { id: invoice.id },
+        data: { cardFailedAt: null, cardFailure: null },
+      });
+    }
   });
 
   return one(ctx.businessId, invoiceId);
@@ -167,6 +193,16 @@ export async function remove(
     if (!payment) throw new ApiError(404, 'That payment no longer exists.', 'not_found');
     if (payment.transaction.reversal) {
       throw new ApiError(409, 'That payment has already been removed.', 'already_removed');
+    }
+    /* The money really is in Stripe. Removing the payment here would take it
+       off the books while it stayed in the bank; a refund in Stripe is what
+       undoes it, and the webhook then reverses it here. */
+    if (payment.stripePaymentIntentId) {
+      throw new ApiError(
+        409,
+        'This was paid by card. Refund it in your Stripe dashboard and it comes off here by itself.',
+        'card_payment',
+      );
     }
 
     const business = await tx.business.findUniqueOrThrow({

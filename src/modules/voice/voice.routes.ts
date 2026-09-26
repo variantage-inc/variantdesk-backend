@@ -5,7 +5,7 @@ import { requireAuth } from '../../middleware/requireAuth.js';
 import { requireWriteAccess } from '../../middleware/requireWriteAccess.js';
 import { idempotent } from '../../middleware/idempotency.js';
 import { validate } from '../../middleware/validate.js';
-import { rateLimit } from '../../middleware/rateLimit.js';
+import { moneyWriteLimit, rateLimit } from '../../middleware/rateLimit.js';
 import { ApiError } from '../../middleware/error.js';
 import { AUDIO_TYPES, MAX_CLIP_BYTES, MAX_CLIP_SECONDS, geminiConfigured } from '../../lib/gemini.js';
 import * as voice from './voice.service.js';
@@ -100,6 +100,7 @@ voiceRouter.post(
   '/voice/:id/confirm',
   requireAuth,
   requireWriteAccess,
+  moneyWriteLimit,
   idempotent,
   validate(confirmSchema),
   async (req, res, next) => {

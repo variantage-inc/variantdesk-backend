@@ -5,6 +5,7 @@ import { env } from '../../lib/env.js';
 import { stripe, subscriptionIdOf } from '../../lib/stripe.js';
 import { isUniqueViolation } from '../../lib/db-errors.js';
 import { syncFromStripe } from './billing.service.js';
+import * as pay from '../cardpay/pay.service.js';
 
 /* The Stripe webhook.
 
@@ -32,6 +33,11 @@ const HANDLED = new Set([
   'customer.subscription.deleted',
   'invoice.paid',
   'invoice.payment_failed',
+  /* From businesses' own connected accounts: a client paying an invoice. */
+  'payment_intent.succeeded',
+  'payment_intent.payment_failed',
+  'charge.refunded',
+  'account.updated',
 ]);
 
 export async function handleStripeWebhook(req: Request, res: Response): Promise<void> {
@@ -46,11 +52,7 @@ export async function handleStripeWebhook(req: Request, res: Response): Promise<
 
   let event: Stripe.Event;
   try {
-    event = stripe().webhooks.constructEvent(
-      req.body as Buffer,
-      signature,
-      env.STRIPE_WEBHOOK_SECRET,
-    );
+    event = verify(req.body as Buffer, signature);
   } catch (err) {
     console.error('Stripe webhook signature failed:', err instanceof Error ? err.message : err);
     res.status(400).json({ error: { code: 'bad_signature', message: 'Signature check failed.' } });
@@ -83,8 +85,45 @@ export async function handleStripeWebhook(req: Request, res: Response): Promise<
   res.json({ received: true });
 }
 
+/* The platform secret first, then the Connect endpoint's, if one is set. */
+function verify(body: Buffer, signature: string): Stripe.Event {
+  try {
+    return stripe().webhooks.constructEvent(body, signature, env.STRIPE_WEBHOOK_SECRET!);
+  } catch (err) {
+    if (!env.STRIPE_CONNECT_WEBHOOK_SECRET) throw err;
+    return stripe().webhooks.constructEvent(body, signature, env.STRIPE_CONNECT_WEBHOOK_SECRET);
+  }
+}
+
 async function process(event: Stripe.Event): Promise<void> {
   switch (event.type) {
+    /* A client paying one of a business's invoices, on that business's own
+       Stripe account. `event.account` says which; the platform's own payments
+       carry none and are ignored by these handlers. */
+    case 'payment_intent.succeeded':
+      await pay.paymentSucceeded(event.data.object, event.account);
+      return;
+
+    case 'payment_intent.payment_failed':
+      await pay.paymentFailed(event.data.object, event.account);
+      return;
+
+    case 'charge.refunded':
+      await pay.chargeRefunded(event.data.object, event.account);
+      return;
+
+    case 'account.updated': {
+      const account = event.data.object;
+      await prisma.business.updateMany({
+        where: { stripeAccountId: account.id },
+        data: {
+          stripeChargesEnabled: account.charges_enabled === true,
+          stripeDetailsSubmitted: account.details_submitted === true,
+        },
+      });
+      return;
+    }
+
     /* Checkout finished. The subscription itself arrives in its own event, so
        all this has to do is make sure we hold the customer id even if the
        subscription event lands first. */

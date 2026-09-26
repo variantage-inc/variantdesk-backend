@@ -10,6 +10,7 @@ import { invoicesRouter } from '../modules/invoices/invoices.routes.js';
 import { reportingRouter } from '../modules/reporting/reporting.routes.js';
 import { voiceRouter } from '../modules/voice/voice.routes.js';
 import { receiptsRouter } from '../modules/receipts/receipts.routes.js';
+import { cardpayRouter } from '../modules/cardpay/cardpay.routes.js';
 
 export const api: Router = Router();
 
@@ -40,3 +41,7 @@ api.use('/', voiceRouter);
 /* Receipts and documents: /api/receipts, /api/attachments/:id, and the upload
    routes under the entry or invoice a file belongs to. */
 api.use('/', receiptsRouter);
+
+/* Card payments on invoices: the Connect link, the invoice's public link, and
+   /api/public, the only routes that answer without a session. */
+api.use('/', cardpayRouter);

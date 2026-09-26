@@ -3,6 +3,7 @@ import { param, query } from '../../lib/params.js';
 import { requireAuth } from '../../middleware/requireAuth.js';
 import { requireWriteAccess } from '../../middleware/requireWriteAccess.js';
 import { idempotent } from '../../middleware/idempotency.js';
+import { moneyWriteLimit } from '../../middleware/rateLimit.js';
 import { validate } from '../../middleware/validate.js';
 import * as invoices from './invoices.service.js';
 import * as payments from './payments.service.js';
@@ -23,7 +24,8 @@ export const invoicesRouter: Router = Router();
    that touches money carries `idempotent`, so a double clicked Record payment
    cannot post the same deposit twice. */
 
-const write = [requireAuth, requireWriteAccess, idempotent] as const;
+/* moneyWriteLimit: every money write, counted per person across all routes. */
+const write = [requireAuth, requireWriteAccess, moneyWriteLimit, idempotent] as const;
 
 /* --------------------------------------------------------------- clients --- */
 
@@ -47,6 +49,7 @@ invoicesRouter.post(
   '/clients',
   requireAuth,
   requireWriteAccess,
+  moneyWriteLimit,
   validate(clientSchema),
   async (req, res, next) => {
     try {
@@ -62,6 +65,7 @@ invoicesRouter.put(
   '/clients/:id',
   requireAuth,
   requireWriteAccess,
+  moneyWriteLimit,
   validate(clientSchema),
   async (req, res, next) => {
     try {
@@ -75,7 +79,7 @@ invoicesRouter.put(
 /* Archives. A client attached to past invoices has to go on existing for six
    years, and an invoice with no billed party is not a document anybody can
    defend. Refused while they still owe you. */
-invoicesRouter.delete('/clients/:id', requireAuth, requireWriteAccess, async (req, res, next) => {
+invoicesRouter.delete('/clients/:id', requireAuth, requireWriteAccess, moneyWriteLimit, async (req, res, next) => {
   try {
     await clients.archive(req.auth!.businessId, param(req, 'id'));
     res.json({ ok: true });

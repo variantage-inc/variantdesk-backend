@@ -4,6 +4,8 @@ import { ApiError } from '../../middleware/error.js';
 import { toCents, taxOn } from '../../lib/money.js';
 import { taxFor } from '../../lib/tax.js';
 import { signedUrl, storageConfigured } from '../../lib/storage.js';
+import { env } from '../../lib/env.js';
+import { randomBytes } from 'node:crypto';
 
 /* Invoicing.
 
@@ -216,7 +218,15 @@ export function publicInvoice(inv: Row) {
       by: `${p.createdBy.firstName} ${p.createdBy.lastName}`.trim(),
       at: p.createdAt.toISOString(),
       transactionId: p.transactionId,
+      /* Paid online by card: Stripe's reference and the fee it took. */
+      card: p.stripePaymentIntentId
+        ? { reference: p.stripePaymentIntentId, feeCents: p.stripeFeeCents }
+        : null,
     })),
+    /* The last card payment the client tried and Stripe declined, if any. */
+    cardFailure: inv.cardFailedAt
+      ? { at: inv.cardFailedAt.toISOString(), message: inv.cardFailure }
+      : null,
     createdAt: inv.createdAt.toISOString(),
   };
 }
@@ -325,6 +335,9 @@ export async function one(businessId: string, id: string) {
   if (!inv) throw new ApiError(404, 'That invoice no longer exists.', 'not_found');
   return {
     ...publicInvoice(inv),
+    /* The link the owner gives their client. Only the owner's own screens see
+       it; the public page is reached with it, never shown it. */
+    publicUrl: inv.publicToken ? publicUrlFor(inv.publicToken) : null,
     logoUrl: inv.sellerLogoKey && storageConfigured() ? await signedUrl(inv.sellerLogoKey) : null,
     attachments: inv.attachments.map((a) => ({ ...a, createdAt: a.createdAt.toISOString() })),
   };
@@ -498,6 +511,38 @@ export async function send(businessId: string, id: string): Promise<PublicInvoic
 
   await prisma.invoice.update({ where: { id }, data: { sentAt: new Date() } });
   return one(businessId, id);
+}
+
+/* ----------------------------------------------------------- public link --- */
+
+export const publicUrlFor = (token: string): string => `${env.APP_URL}/pay/${token}`;
+
+/* The link a client opens to see and pay the invoice, without an account.
+
+   Invoice emails were cut from scope, so this link is how a client is given
+   the document at all. The token is 24 random bytes, not the invoice id: the
+   id is guessable from any other invoice, the token is not. Replacing it is how
+   a link sent to the wrong person is taken back. A draft has no link, because
+   a draft is not a debt anybody has been told about. */
+export async function ensureLink(businessId: string, id: string, replace = false) {
+  const invoice = await prisma.invoice.findFirst({
+    where: { id, businessId, voidedAt: null },
+    select: { id: true, sentAt: true, publicToken: true },
+  });
+  if (!invoice) throw new ApiError(404, 'That invoice no longer exists.', 'not_found');
+  if (!invoice.sentAt) {
+    throw new ApiError(
+      409,
+      'Mark the invoice as sent first. A draft is not something to give a client.',
+      'invoice_is_draft',
+    );
+  }
+
+  if (invoice.publicToken && !replace) return { url: publicUrlFor(invoice.publicToken) };
+
+  const token = randomBytes(24).toString('base64url');
+  await prisma.invoice.update({ where: { id: invoice.id }, data: { publicToken: token } });
+  return { url: publicUrlFor(token) };
 }
 
 /* Voided, not deleted. An invoice number is never reissued, so the row has to

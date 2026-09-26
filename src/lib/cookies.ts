@@ -13,7 +13,7 @@ export function setRefreshCookie(res: Response, raw: string, remembered = true):
     httpOnly: true,
     /* Secure requires HTTPS, which localhost is not, so it is off in dev only. */
     secure: !isDev,
-    sameSite: 'lax',
+    sameSite: env.COOKIE_SAMESITE,
     path: '/api/auth',
     /* No maxAge makes this a session cookie, which the browser throws away when
        the window closes. That is the whole difference the checkbox controls,
@@ -24,7 +24,11 @@ export function setRefreshCookie(res: Response, raw: string, remembered = true):
 }
 
 export function clearRefreshCookie(res: Response): void {
-  res.clearCookie(REFRESH_COOKIE, { path: '/api/auth', secure: !isDev, sameSite: 'lax' });
+  res.clearCookie(REFRESH_COOKIE, {
+    path: '/api/auth',
+    secure: !isDev,
+    sameSite: env.COOKIE_SAMESITE,
+  });
 }
 
 export const corsOrigins = (): string[] => env.CORS_ORIGIN.split(',').map((s) => s.trim());

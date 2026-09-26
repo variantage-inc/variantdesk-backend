@@ -3,6 +3,7 @@ import { param } from '../../lib/params.js';
 import { requireAuth } from '../../middleware/requireAuth.js';
 import { requireWriteAccess } from '../../middleware/requireWriteAccess.js';
 import { idempotent } from '../../middleware/idempotency.js';
+import { moneyWriteLimit } from '../../middleware/rateLimit.js';
 import { validate } from '../../middleware/validate.js';
 import * as transactions from './transactions.service.js';
 import * as historyView from './history.service.js';
@@ -28,7 +29,8 @@ export const transactionsRouter: Router = Router();
    10 will post one from a spoken sentence, and neither will come through
    here. */
 
-const write = [requireAuth, requireWriteAccess, idempotent] as const;
+/* moneyWriteLimit: every money write, counted per person across all routes. */
+const write = [requireAuth, requireWriteAccess, moneyWriteLimit, idempotent] as const;
 
 /* ---------------------------------------------------------------- income --- */
 

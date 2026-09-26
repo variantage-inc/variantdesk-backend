@@ -1,8 +1,12 @@
+/* First, so Sentry is ready before anything else can fail. */
+import './lib/sentry.js';
 import { createApp } from './app.js';
 import { env } from './lib/env.js';
 import { prisma } from './lib/prisma.js';
+import { startHousekeeping } from './lib/housekeeping.js';
 
 const app = createApp();
+startHousekeeping();
 
 const server = app.listen(env.PORT, () => {
   console.log(`Variantage API listening on http://localhost:${env.PORT}`);

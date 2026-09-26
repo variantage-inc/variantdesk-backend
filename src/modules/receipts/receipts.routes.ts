@@ -49,7 +49,7 @@ export const fileName = (req: Request): string | undefined => {
 
 /* Sixty files in fifteen minutes, per address and record. Generous for
    somebody catching up on a shoebox, and a ceiling on a loop. */
-const uploadLimit = rateLimit(60, 15 * 60 * 1000);
+const uploadLimit = rateLimit(60, 15 * 60 * 1000, (req) => `upload:${req.auth?.userId ?? req.ip}`);
 
 const upload = [requireAuth, requireWriteAccess, uploadLimit, fileBody] as const;
 

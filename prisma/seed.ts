@@ -480,9 +480,23 @@ function samplePdf(
 /* Removed and rebuilt rather than merged. The ledger is append only, so there
    is no way to correct seeded rows in place, and a second run that added a
    second copy of every entry would double every figure on the dashboard. */
-async function wipe(): Promise<void> {
+/* What survives a rebuild: the Stripe account the business connected. It was
+   set up by a person on Stripe's own pages and cannot be recreated by a
+   script, so it is carried over rather than lost every time the seed runs. */
+type Kept = {
+  stripeAccountId: string | null;
+  stripeChargesEnabled: boolean;
+  stripeDetailsSubmitted: boolean;
+};
+
+async function wipe(): Promise<Kept | null> {
   const existing = await prisma.business.findUnique({ where: { id: BUSINESS_ID } });
-  if (!existing) return;
+  if (!existing) return null;
+  const kept: Kept = {
+    stripeAccountId: existing.stripeAccountId,
+    stripeChargesEnabled: existing.stripeChargesEnabled,
+    stripeDetailsSubmitted: existing.stripeDetailsSubmitted,
+  };
 
   /* In dependency order. Transactions reference categories, vendors and
      clients with ON DELETE RESTRICT, which is right for real data and means
@@ -503,9 +517,10 @@ async function wipe(): Promise<void> {
   await prisma.category.deleteMany({ where: { businessId: BUSINESS_ID } });
   await prisma.business.delete({ where: { id: BUSINESS_ID } });
   console.log('Removed the previous seed.');
+  return kept;
 }
 
-async function createBusiness(): Promise<{ businessId: string; userId: string }> {
+async function createBusiness(kept: Kept | null): Promise<{ businessId: string; userId: string }> {
   /* The subscription and the starting categories are created with the
      business, in one transaction, exactly as signup does it. An account with
      no subscription row cannot be told whether it may write, and would open
@@ -530,6 +545,7 @@ async function createBusiness(): Promise<{ businessId: string; userId: string }>
       invoiceTerms: 'Payment due within 30 days of the invoice date.',
       invoiceFooter:
         'Thank you for your business. Interest of 2% per month is charged on overdue accounts.',
+      ...(kept ?? {}),
       subscription: { create: trialCreateData() },
       categories: { create: defaultCategories() },
     },
@@ -558,8 +574,9 @@ async function main(): Promise<void> {
     throw new Error('The seed rewrites a business from scratch. It does not run in production.');
   }
 
-  await wipe();
-  const ctx = await createBusiness();
+  const kept = await wipe();
+  const ctx = await createBusiness(kept);
+  if (kept?.stripeAccountId) console.log('Kept the connected Stripe account.');
   console.log('Maple Ridge Consulting created, with its trial and starting categories.');
 
   /* Names to ids, once, so the tables above can read as the mockup reads. */

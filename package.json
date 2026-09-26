@@ -2,18 +2,19 @@
   "name": "variantage-backend",
   "version": "0.1.0",
   "private": true,
-  "description": "Variantage Finance API — every business rule lives here",
+  "description": "Variantage Finance API \u2014 every business rule lives here",
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "prisma generate && tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.seed.json",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:seed": "tsx prisma/seed.ts",
+    "db:deploy": "prisma migrate deploy"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -25,6 +26,7 @@
     "@neon/env": "^1.2.2",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
+    "@sentry/node": "^11.0.0",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",

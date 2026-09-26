@@ -7,6 +7,9 @@ declare global {
   namespace Express {
     interface Request {
       auth?: AccessClaims;
+      /* One id per request, echoed in X-Request-Id and every log line, so a
+         customer's report of an error can be found in the log. */
+      id?: string;
     }
   }
 }
