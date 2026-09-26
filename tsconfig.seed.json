@@ -1,0 +1,12 @@
+{
+  // The seed lives outside src, so the build's rootDir cannot cover it. It is
+  // four hundred lines that write money through the services, which is not
+  // code that should only be checked when somebody runs it, so `npm run
+  // typecheck` checks it here with exactly the same strictness.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src/**/*.ts", "prisma/**/*.ts"]
+}
