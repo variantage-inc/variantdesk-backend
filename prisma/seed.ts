@@ -43,7 +43,10 @@ import * as invoices from '../src/modules/invoices/invoices.service.js';
 import * as payments from '../src/modules/invoices/payments.service.js';
 import * as clients from '../src/modules/invoices/clients.service.js';
 import * as settings from '../src/modules/settings/settings.service.js';
-import { derive } from '../src/modules/reporting/derive.js';
+import * as receipts from '../src/modules/receipts/receipts.service.js';
+import { derive, unreceipted } from '../src/modules/reporting/derive.js';
+import { deletePrefix, storageConfigured } from '../src/lib/storage.js';
+import PDFDocument from 'pdfkit';
 
 const BUSINESS_ID = 'seed-maple-ridge';
 const OWNER_EMAIL = 'sarah@mapleridgeconsulting.ca';
@@ -128,7 +131,17 @@ const CLIENTS = [
 /* ------------------------------------------------------------ the entries --- */
 
 type Income = { date: string; description: string; client: string; category: string; amount: number };
-type Expense = { date: string; description: string; vendor: string; category: string; amount: number };
+/* `noReceipt` marks the six July expenses MISSING_ENTRIES lists. Every other
+   expense, and every income entry typed by hand, gets a sample receipt, so
+   "chase these first" opens on exactly the six the client reviewed. */
+type Expense = {
+  date: string;
+  description: string;
+  vendor: string;
+  category: string;
+  amount: number;
+  noReceipt?: true;
+};
 type Drawing = { date: string; purpose: string; amount: number };
 
 type Month = { key: string; income: Income[]; expenses: Expense[]; drawings: Drawing[] };
@@ -267,16 +280,16 @@ const MONTHS: Month[] = [
       { date: '2026-07-02', description: 'Advert, July', vendor: 'Toronto Star', category: 'Advertising', amount: 281.5 },
       { date: '2026-07-06', description: 'Internet and mobile, July', vendor: 'Rogers Communications', category: 'Bills Payment', amount: 161.0 },
       { date: '2026-07-08', description: 'Pens and labels', vendor: 'Staples', category: 'Office Supplies', amount: 4.25 },
-      { date: '2026-07-09', description: 'Design tool, monthly', vendor: 'Figma', category: 'Software & Subscriptions', amount: 24.0 }, // no receipt
+      { date: '2026-07-09', description: 'Design tool, monthly', vendor: 'Figma', category: 'Software & Subscriptions', amount: 24.0, noReceipt: true },
       { date: '2026-07-13', description: 'Fuel, July', vendor: 'Petro-Canada', category: 'Vehicle & Fuel', amount: 36.67 },
-      { date: '2026-07-15', description: 'Listing, local paper', vendor: 'Toronto Star', category: 'Advertising', amount: 68.5 }, // no receipt
-      { date: '2026-07-19', description: 'Mobile top-up', vendor: 'Bell Canada', category: 'Bills Payment', amount: 55.0 }, // no receipt
+      { date: '2026-07-15', description: 'Listing, local paper', vendor: 'Toronto Star', category: 'Advertising', amount: 68.5, noReceipt: true },
+      { date: '2026-07-19', description: 'Mobile top-up', vendor: 'Bell Canada', category: 'Bills Payment', amount: 55.0, noReceipt: true },
       { date: '2026-07-22', description: 'Creative Cloud, monthly', vendor: 'Adobe Systems', category: 'Software & Subscriptions', amount: 65.99 },
-      { date: '2026-07-23', description: 'Notebooks and folders', vendor: 'Amazon Business', category: 'Office Supplies', amount: 47.0 }, // no receipt
+      { date: '2026-07-23', description: 'Notebooks and folders', vendor: 'Amazon Business', category: 'Office Supplies', amount: 47.0, noReceipt: true },
       { date: '2026-07-25', description: 'Front-end build, sprint 4', vendor: 'Bennett Digital', category: 'Contractors Payments', amount: 2400.0 },
-      { date: '2026-07-26', description: 'Printer paper and ink', vendor: 'Staples', category: 'Office Supplies', amount: 92.0 }, // no receipt
+      { date: '2026-07-26', description: 'Printer paper and ink', vendor: 'Staples', category: 'Office Supplies', amount: 92.0, noReceipt: true },
       { date: '2026-07-27', description: 'Hydro, July', vendor: 'Oshawa Power Ltd.', category: 'Bills Payment', amount: 182.0 },
-      { date: '2026-07-30', description: 'Parking, client visit', vendor: 'Green P Toronto', category: 'Vehicle & Fuel', amount: 41.73 }, // no receipt
+      { date: '2026-07-30', description: 'Parking, client visit', vendor: 'Green P Toronto', category: 'Vehicle & Fuel', amount: 41.73, noReceipt: true },
     ],
     drawings: [
       { date: '2026-07-05', purpose: 'Car insurance renewal', amount: 1000.0 },
@@ -436,6 +449,34 @@ const date = (iso: string): Date => new Date(`${iso}T00:00:00.000Z`);
 
 const money = (cents: number): string => (cents / 100).toFixed(2);
 
+/* A one page PDF that says plainly it is sample data. Real enough to open,
+   download and print, and impossible to mistake for a real receipt. */
+function samplePdf(
+  heading: string,
+  who: string,
+  entry: transactions.PublicTransaction,
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: [360, 480], margin: 32 });
+    const parts: Buffer[] = [];
+    doc.on('data', (b: Buffer) => parts.push(b));
+    doc.on('end', () => resolve(Buffer.concat(parts)));
+    doc.on('error', reject);
+
+    doc.fontSize(9).fillColor('#b42318').text('SAMPLE DATA, created by the development seed');
+    doc.moveDown().fontSize(16).fillColor('#142539').text(who);
+    doc.fontSize(10).fillColor('#5b6b7f').text(`${heading} · ${entry.date}`);
+    doc.moveDown().fillColor('#142539').fontSize(11).text(entry.description);
+    doc.moveDown();
+    const row = (label: string, cents: number) =>
+      doc.fontSize(11).text(`${label}: ${money(cents)}`, { align: 'right' });
+    row('Before tax', entry.subtotalCents);
+    row(entry.taxLabel, entry.taxCents);
+    row('Total', entry.totalCents);
+    doc.end();
+  });
+}
+
 /* Removed and rebuilt rather than merged. The ledger is append only, so there
    is no way to correct seeded rows in place, and a second run that added a
    second copy of every entry would double every figure on the dashboard. */
@@ -447,6 +488,13 @@ async function wipe(): Promise<void> {
      clients with ON DELETE RESTRICT, which is right for real data and means
      the rows have to come out from the inside. */
   await prisma.voiceEntry.deleteMany({ where: { businessId: BUSINESS_ID } });
+  /* The receipts go first, and their files with them. Every key starts with
+     the business id, so one prefix clears the lot. */
+  await prisma.attachment.deleteMany({ where: { businessId: BUSINESS_ID } });
+  if (storageConfigured()) {
+    const files = await deletePrefix(`${BUSINESS_ID}/`);
+    if (files) console.log(`Removed ${files} stored files.`);
+  }
   await prisma.invoicePayment.deleteMany({ where: { businessId: BUSINESS_ID } });
   await prisma.transaction.deleteMany({ where: { businessId: BUSINESS_ID } });
   await prisma.invoice.deleteMany({ where: { businessId: BUSINESS_ID } });
@@ -557,9 +605,10 @@ async function main(): Promise<void> {
   /* Every entry through modules/transactions, which is the same path the
      income, expenses and drawings screens take. */
   let written = 0;
+  const needsReceipt: { entry: transactions.PublicTransaction; who: string; heading: string }[] = [];
   for (const month of MONTHS) {
     for (const row of month.income) {
-      await transactions.create(ctx, 'INCOME', {
+      const entry = await transactions.create(ctx, 'INCOME', {
         date: date(row.date),
         amount: row.amount,
         description: row.description,
@@ -569,10 +618,11 @@ async function main(): Promise<void> {
         /* The table holds figures before tax, which is how work is quoted. */
         taxMode: 'ADD',
       });
+      needsReceipt.push({ entry, who: row.client, heading: 'Remittance advice' });
       written += 1;
     }
     for (const row of month.expenses) {
-      await transactions.create(ctx, 'EXPENSE', {
+      const entry = await transactions.create(ctx, 'EXPENSE', {
         date: date(row.date),
         amount: row.amount,
         description: row.description,
@@ -581,6 +631,7 @@ async function main(): Promise<void> {
         reference: null,
         taxMode: 'ADD',
       });
+      if (!row.noReceipt) needsReceipt.push({ entry, who: row.vendor, heading: 'Receipt' });
       written += 1;
     }
     for (const row of month.drawings) {
@@ -597,6 +648,23 @@ async function main(): Promise<void> {
     console.log(`  ${month.key}: ${month.income.length + month.expenses.length + month.drawings.length} entries`);
   }
   console.log(`${written} entries written through the ledger.`);
+
+  /* Receipts, through the same service the upload route calls, so each one is
+     sniffed, stored in the bucket and recorded exactly as a real one is. Eight
+     at a time, because each is a round trip to storage and to Neon. */
+  if (storageConfigured()) {
+    for (let i = 0; i < needsReceipt.length; i += 8) {
+      await Promise.all(
+        needsReceipt.slice(i, i + 8).map(async ({ entry, who, heading }) => {
+          const pdf = await samplePdf(heading, who, entry);
+          await receipts.attachToEntry(ctx, entry.id, pdf, `${who} ${entry.date}.pdf`);
+        }),
+      );
+    }
+    console.log(`${needsReceipt.length} sample receipts stored and attached. Six July expenses left without.`);
+  } else {
+    console.log('Object storage is not configured, so no receipts were attached.');
+  }
 
   for (const seed of INVOICES) {
     /* The number is taken from the business counter, so it is moved to the
@@ -694,6 +762,26 @@ async function verify(businessId: string): Promise<void> {
     `\n  invoices: ${list.counts.all}   outstanding ${money(outstanding)}` +
       (outstanding === wantOutstanding ? '  matches the mockup' : `  != ${money(wantOutstanding)}`),
   );
+
+  /* Chase these first: the six July expenses, and the tax on them, which the
+     mockup publishes as 42.67. All time, because they are the only six. */
+  if (storageConfigured()) {
+    const july = await derive(businessId, {
+      from: new Date(Date.UTC(2026, 6, 1)),
+      to: new Date(Date.UTC(2026, 6, 31)),
+    });
+    const ever = await unreceipted(businessId, null, 0);
+    const ok =
+      july.missingReceipts.count === 6 &&
+      july.missingReceipts.atRiskCents === 4267 &&
+      ever.count === 6 &&
+      ever.atRiskCents === 4267;
+    if (!ok) wrong += 1;
+    console.log(
+      `  missing receipts: ${ever.count}, ${money(ever.atRiskCents)} at risk` +
+        (ok ? '  matches the mockup' : '  != 6 and 42.67'),
+    );
+  }
 
   if (wrong > 0) {
     throw new Error(`${wrong} figure(s) do not match the published data. The seed is wrong.`);

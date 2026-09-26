@@ -3,6 +3,7 @@ import { prisma } from '../../lib/prisma.js';
 import { ApiError } from '../../middleware/error.js';
 import { toCents, taxOn } from '../../lib/money.js';
 import { taxFor } from '../../lib/tax.js';
+import { signedUrl, storageConfigured } from '../../lib/storage.js';
 
 /* Invoicing.
 
@@ -307,13 +308,26 @@ export async function list(businessId: string, q: ListQuery) {
   };
 }
 
-export async function one(businessId: string, id: string): Promise<PublicInvoice> {
+/* One invoice, with the two things the list does not need: the logo it was
+   printed with, as a short lived link, and the documents attached to it. */
+export async function one(businessId: string, id: string) {
   const inv = await prisma.invoice.findFirst({
     where: { id, businessId, voidedAt: null },
-    include: shape,
+    include: {
+      ...shape,
+      attachments: {
+        where: { deletedAt: null },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, fileName: true, contentType: true, sizeBytes: true, createdAt: true },
+      },
+    },
   });
   if (!inv) throw new ApiError(404, 'That invoice no longer exists.', 'not_found');
-  return publicInvoice(inv);
+  return {
+    ...publicInvoice(inv),
+    logoUrl: inv.sellerLogoKey && storageConfigured() ? await signedUrl(inv.sellerLogoKey) : null,
+    attachments: inv.attachments.map((a) => ({ ...a, createdAt: a.createdAt.toISOString() })),
+  };
 }
 
 /* ---------------------------------------------------------------- writes --- */
@@ -381,6 +395,7 @@ export async function create(ctx: Ctx, input: InvoiceInput): Promise<PublicInvoi
         sellerEmail: business.email,
         sellerPhone: business.phone,
         gstHstNumber: business.gstRegistered ? business.gstHstNumber : null,
+        sellerLogoKey: business.logoKey,
         billToName: client.name,
         billToContact: client.contactName,
         billToAddress: clientAddressOf(client),

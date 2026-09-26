@@ -423,13 +423,74 @@ async function recent(businessId: string, period: Period) {
   }));
 }
 
+/* ------------------------------------------------------- missing receipts --- */
+
+/* Business expenses with no document behind them, and the tax on them.
+
+   That tax is the input tax credit the CRA can refuse without a receipt, which
+   is why this list exists: it puts a figure on the gap. Expenses only. Income
+   needs no proof of tax paid, and a drawing is a transfer to the owner, with
+   nothing to prove and nothing to claim.
+
+   The dashboard asks for its period; the Receipts screen asks for all time,
+   because a missing receipt from March is still missing in September. One
+   query either way, so the two screens cannot count differently. */
+export async function unreceipted(businessId: string, period: Period | null, take = 50) {
+  const where: Prisma.TransactionWhereInput = {
+    ...liveEntries(businessId),
+    type: 'EXPENSE',
+    attachments: { none: { deletedAt: null } },
+    ...(period ? { date: { gte: period.from, lte: period.to } } : {}),
+  };
+
+  const [agg, rows] = await Promise.all([
+    prisma.transaction.aggregate({
+      where,
+      _sum: { subtotalCents: true, taxCents: true },
+      _min: { date: true },
+      _max: { date: true },
+      _count: true,
+    }),
+    take > 0
+      ? prisma.transaction.findMany({
+          where,
+          orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+          take,
+          include: {
+            vendor: { select: { name: true } },
+            category: { select: { name: true } },
+          },
+        })
+      : [],
+  ]);
+
+  return {
+    count: agg._count,
+    atRiskCents: agg._sum.taxCents ?? 0,
+    subtotalCents: agg._sum.subtotalCents ?? 0,
+    /* The span, so a screen can say "all in July" without fetching every row. */
+    firstDate: agg._min.date ? iso(agg._min.date) : null,
+    lastDate: agg._max.date ? iso(agg._max.date) : null,
+    entries: rows.map((t) => ({
+      id: t.id,
+      date: iso(t.date),
+      description: t.description,
+      vendor: t.vendor?.name ?? null,
+      category: t.category?.name ?? null,
+      subtotalCents: t.subtotalCents,
+      taxCents: t.taxCents,
+      totalCents: t.totalCents,
+    })),
+  };
+}
+
 /* ------------------------------------------------------------------ all of it --- */
 
 export async function derive(businessId: string, period: Period) {
   const state = periodState(period);
   const previous = previousPeriod(period);
 
-  const [business, buckets, categories, months, invoices, entries, previousBuckets] =
+  const [business, buckets, categories, months, invoices, entries, previousBuckets, missing] =
     await Promise.all([
       prisma.business.findUniqueOrThrow({
         where: { id: businessId },
@@ -444,6 +505,7 @@ export async function derive(businessId: string, period: Period) {
          running period is a part, and a part against a whole is not a
          comparison, it is a wrong number with a percent sign on it. */
       state.complete ? bucketsFor(businessId, previous) : null,
+      unreceipted(businessId, period, 0),
     ]);
 
   return {
@@ -458,6 +520,12 @@ export async function derive(businessId: string, period: Period) {
     months,
     invoices,
     recent: entries,
+    missingReceipts: {
+      count: missing.count,
+      atRiskCents: missing.atRiskCents,
+      firstDate: missing.firstDate,
+      lastDate: missing.lastDate,
+    },
     previous: previousBuckets
       ? {
           from: iso(previous.from),

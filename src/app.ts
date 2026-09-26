@@ -20,7 +20,11 @@ export function createApp() {
   app.use(helmet());
   /* The browser sends cookies for the refresh token, so the origin has to be
      named explicitly. A wildcard is not allowed with credentials. */
-  app.use(cors({ origin: corsOrigins(), credentials: true }));
+  /* Content-Disposition is exposed so a download fetched from the browser can
+     read the file name it was sent with, rather than inventing one. */
+  app.use(
+    cors({ origin: corsOrigins(), credentials: true, exposedHeaders: ['Content-Disposition'] }),
+  );
   /* The Stripe webhook, and it has to be here rather than with the other
      routes.
 

@@ -196,7 +196,14 @@ model Business {
   // an integer rate cannot drift, and it prints on the invoice as written.
   lateInterestBp Int? @default(200) @map("late_interest_bp")
 
-  logoKey String? @map("logo_key")
+  // The logo lives in object storage; these describe it so Settings can show
+  // what is there without a round trip to the bucket. A new upload takes a new
+  // key, because an issued invoice keeps the key it was printed with.
+  logoKey         String?   @map("logo_key")
+  logoFileName    String?   @map("logo_file_name")
+  logoContentType String?   @map("logo_content_type")
+  logoSizeBytes   Int?      @map("logo_size_bytes")
+  logoUploadedAt  DateTime? @map("logo_uploaded_at")
 
   // Web only. The phone stays signed in until manual logout.
   idleTimeoutMinutes Int @default(15) @map("idle_timeout_minutes")
@@ -214,6 +221,7 @@ model Business {
   invoices        Invoice[]
   invoicePayments InvoicePayment[]
   voiceEntries    VoiceEntry[]
+  attachments     Attachment[]
 
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
@@ -261,6 +269,7 @@ model User {
   invoices        Invoice[]        @relation("invoiceAuthor")
   invoicePayments InvoicePayment[] @relation("invoicePaymentAuthor")
   voiceEntries    VoiceEntry[]     @relation("voiceAuthor")
+  attachments     Attachment[]     @relation("attachmentAuthor")
 
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
@@ -630,6 +639,11 @@ model Transaction {
   // balance, which is exactly the double counting the link exists to prevent.
   invoicePayment InvoicePayment?
 
+  // The receipts behind this entry. Not money, so not bound by append only:
+  // when an entry is corrected, its receipts are moved onto the replacement
+  // in the same database transaction, because the paper did not change.
+  attachments Attachment[]
+
   // Who typed it. A relation rather than a bare id, because on an account with
   // three people the first question about a changed figure is who changed it,
   // and the answer should not need a second query to find.
@@ -707,6 +721,9 @@ model Invoice {
   sellerEmail   String? @map("seller_email")
   sellerPhone   String? @map("seller_phone")
   gstHstNumber  String? @map("gst_hst_number")
+  // The logo as it was when the invoice was raised. Storage never deletes an
+  // object an invoice still points at, so a new logo cannot reprint old ones.
+  sellerLogoKey String? @map("seller_logo_key")
 
   // ---- copied from the client at issue ----
   billToName    String  @map("bill_to_name")
@@ -749,8 +766,9 @@ model Invoice {
   // reissued, so the row has to stay even when the invoice does not.
   voidedAt DateTime? @map("voided_at")
 
-  items    InvoiceItem[]
-  payments InvoicePayment[]
+  items       InvoiceItem[]
+  payments    InvoicePayment[]
+  attachments Attachment[]
 
   // Who raised it, for the audit trail on a shared account.
   createdById String   @map("created_by_id")
@@ -825,6 +843,46 @@ model InvoicePayment {
   @@index([invoiceId])
   @@index([businessId])
   @@map("invoice_payment")
+}
+
+// ---------------------------------------------------------- attachment ----
+// A receipt or document, never a loose file. It belongs to exactly one ledger
+// entry or one invoice, and a CHECK constraint in the migration holds that:
+// a file attached to nothing is a file nobody will ever find again.
+//
+// The bytes live in the private bucket under `key`; this row is what makes
+// them findable. Removing a receipt deletes the object and keeps the row with
+// `deletedAt`, so "who removed the proof for this expense" still has an
+// answer after the file itself is gone.
+model Attachment {
+  id         String   @id @default(cuid())
+  businessId String   @map("business_id")
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  transactionId String?      @map("transaction_id")
+  transaction   Transaction? @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  invoiceId     String?      @map("invoice_id")
+  invoice       Invoice?     @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  key String @unique
+
+  // What the owner called it, cleaned, with the extension the bytes proved.
+  fileName String @map("file_name")
+  // Worked out from the bytes on upload, never taken from the browser.
+  contentType String @map("content_type")
+  sizeBytes   Int    @map("size_bytes")
+
+  createdById String   @map("created_by_id")
+  createdBy   User     @relation("attachmentAuthor", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  deletedAt   DateTime? @map("deleted_at")
+  deletedById String?   @map("deleted_by_id")
+
+  @@index([businessId, deletedAt])
+  @@index([transactionId])
+  @@index([invoiceId])
+  @@map("attachment")
 }
 
 

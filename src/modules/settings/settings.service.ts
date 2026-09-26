@@ -4,6 +4,16 @@ import { isUniqueViolation } from '../../lib/db-errors.js';
 import { hashPassword, verifyPassword } from '../../lib/password.js';
 import { taxFor, provinceList } from '../../lib/tax.js';
 import { DRAWINGS_CATEGORY } from '../../lib/defaults.js';
+import {
+  cleanFileName,
+  deleteObject,
+  keyFor,
+  putObject,
+  signedUrl,
+  sniff,
+  sniffSvg,
+  storageConfigured,
+} from '../../lib/storage.js';
 import type { Business } from '../../generated/prisma/client.js';
 
 /* Settings.
@@ -53,6 +63,16 @@ export const settingsView = (b: Business) => {
       invoicePayTo: b.invoicePayTo,
       idleTimeoutMinutes: b.idleTimeoutMinutes,
       idleWarningSeconds: b.idleWarningSeconds,
+      /* What is on file, never where. The picture itself comes from
+         GET /settings/logo as a short lived link. */
+      logo: b.logoKey
+        ? {
+            fileName: b.logoFileName ?? 'logo',
+            contentType: b.logoContentType ?? 'image/png',
+            sizeBytes: b.logoSizeBytes ?? 0,
+            uploadedAt: b.logoUploadedAt?.toISOString() ?? null,
+          }
+        : null,
     },
     /* The rate that follows from the province, sent with the settings rather
        than looked up in the browser. One table, in the API, so the web app and
@@ -69,6 +89,85 @@ export const settingsView = (b: Business) => {
 
 export async function getSettings(businessId: string) {
   const business = await prisma.business.findUniqueOrThrow({ where: { id: businessId } });
+  return settingsView(business);
+}
+
+/* ------------------------------------------------------------------ logo --- */
+
+export const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+
+export async function logoLink(businessId: string) {
+  const b = await prisma.business.findUniqueOrThrow({
+    where: { id: businessId },
+    select: { logoKey: true },
+  });
+  return { url: b.logoKey && storageConfigured() ? await signedUrl(b.logoKey) : null };
+}
+
+/* An old logo is removed from storage only when no invoice was printed with
+   it. An issued invoice is a document, and a new logo must not reprint it. */
+async function retireLogo(key: string | null): Promise<void> {
+  if (!key) return;
+  const printed = await prisma.invoice.count({ where: { sellerLogoKey: key } });
+  if (!printed) await deleteObject(key).catch(() => undefined);
+}
+
+export async function setLogo(businessId: string, bytes: Buffer, rawName: string | undefined) {
+  if (!storageConfigured()) {
+    throw new ApiError(503, 'Document storage is not switched on yet.', 'storage_unconfigured');
+  }
+  if (bytes.length === 0) throw new ApiError(400, 'That file is empty.', 'empty_file');
+  if (bytes.length > MAX_LOGO_BYTES) {
+    throw new ApiError(413, 'A logo can be up to 2 MB.', 'file_too_large');
+  }
+
+  const sniffed = sniff(bytes);
+  const kind =
+    sniffed && (sniffed.ext === 'png' || sniffed.ext === 'jpg') ? sniffed : sniffSvg(bytes);
+  if (!kind) {
+    throw new ApiError(415, 'A logo can be a PNG, a JPG or an SVG.', 'unsupported_file');
+  }
+
+  const before = await prisma.business.findUniqueOrThrow({
+    where: { id: businessId },
+    select: { logoKey: true },
+  });
+
+  const fileName = cleanFileName(rawName, kind.ext, 'logo');
+  const key = keyFor(businessId, 'logos', kind.ext);
+  await putObject(key, bytes, { contentType: kind.contentType, fileName });
+
+  const business = await prisma.business.update({
+    where: { id: businessId },
+    data: {
+      logoKey: key,
+      logoFileName: fileName,
+      logoContentType: kind.contentType,
+      logoSizeBytes: bytes.length,
+      logoUploadedAt: new Date(),
+    },
+  });
+
+  await retireLogo(before.logoKey);
+  return settingsView(business);
+}
+
+export async function removeLogo(businessId: string) {
+  const before = await prisma.business.findUniqueOrThrow({
+    where: { id: businessId },
+    select: { logoKey: true },
+  });
+  const business = await prisma.business.update({
+    where: { id: businessId },
+    data: {
+      logoKey: null,
+      logoFileName: null,
+      logoContentType: null,
+      logoSizeBytes: null,
+      logoUploadedAt: null,
+    },
+  });
+  await retireLogo(before.logoKey);
   return settingsView(business);
 }
 

@@ -9,6 +9,7 @@ import { transactionsRouter } from '../modules/transactions/transactions.routes.
 import { invoicesRouter } from '../modules/invoices/invoices.routes.js';
 import { reportingRouter } from '../modules/reporting/reporting.routes.js';
 import { voiceRouter } from '../modules/voice/voice.routes.js';
+import { receiptsRouter } from '../modules/receipts/receipts.routes.js';
 
 export const api: Router = Router();
 
@@ -36,4 +37,6 @@ api.use('/', reportingRouter);
    because the route declares its own parser for audio content types. */
 api.use('/', voiceRouter);
 
-/* Later phases add their routers here: receipts. */
+/* Receipts and documents: /api/receipts, /api/attachments/:id, and the upload
+   routes under the entry or invoice a file belongs to. */
+api.use('/', receiptsRouter);

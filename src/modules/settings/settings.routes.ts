@@ -7,6 +7,7 @@ import { requireAuth, requireOwner } from '../../middleware/requireAuth.js';
 import { requireWriteAccess } from '../../middleware/requireWriteAccess.js';
 import { validate } from '../../middleware/validate.js';
 import * as settings from './settings.service.js';
+import { fileBody, fileName } from '../receipts/receipts.routes.js';
 import {
   businessProfileSchema,
   categorySchema,
@@ -65,6 +66,32 @@ settingsRouter.put(
     }
   },
 );
+
+/* The logo. Uploaded as a raw body like a receipt, and owner only like the
+   rest of the business profile, because it prints on every invoice. */
+settingsRouter.get('/logo', requireAuth, async (req, res, next) => {
+  try {
+    res.json(await settings.logoLink(req.auth!.businessId));
+  } catch (err) {
+    next(err);
+  }
+});
+
+settingsRouter.put('/logo', ...ownerWrite, fileBody, async (req, res, next) => {
+  try {
+    res.json(await settings.setLogo(req.auth!.businessId, req.body as Buffer, fileName(req)));
+  } catch (err) {
+    next(err);
+  }
+});
+
+settingsRouter.delete('/logo', ...ownerWrite, async (req, res, next) => {
+  try {
+    res.json(await settings.removeLogo(req.auth!.businessId));
+  } catch (err) {
+    next(err);
+  }
+});
 
 settingsRouter.put('/tax', ...ownerWrite, validate(taxSchema), async (req, res, next) => {
   try {

@@ -5,6 +5,7 @@ import { toCents } from '../../lib/money.js';
 import { liveEntries, amend, record, reverse, type EntryInput } from '../../lib/ledger.js';
 import { taxFor } from '../../lib/tax.js';
 import type { ListQuery } from './transactions.schemas.js';
+import { briefAttachment, liveAttachments } from '../receipts/receipts.service.js';
 
 /* Reading and writing money.
 
@@ -79,6 +80,8 @@ const shape = {
      belongs to that invoice and cannot be edited here: changing it would move
      the money without moving the invoice balance. */
   invoicePayment: { select: { invoice: { select: { id: true, number: true } } } },
+  /* The receipts behind it, which is what the clip in each row shows. */
+  attachments: liveAttachments,
 } satisfies Prisma.TransactionInclude;
 
 type Row = Prisma.TransactionGetPayload<{ include: typeof shape }>;
@@ -115,6 +118,7 @@ const publicRow = (t: Row) => ({
      longer part of the books. It stays readable because the ledger is append
      only, and saying so is the difference between history and a stale form. */
   superseded: t.reversal !== null,
+  attachments: t.attachments.map(briefAttachment),
   createdAt: t.createdAt.toISOString(),
 });
 

@@ -316,9 +316,21 @@ export async function amend(ctx: Ctx, id: string, input: EntryInput): Promise<Tr
 
     await tx.transaction.create({ data: reversalFor(original, ctx.userId, 'Corrected') });
 
-    return tx.transaction.create({
+    const replacement = await tx.transaction.create({
       data: { ...rowFor(ctx, input), replacesId: original.id },
     });
+
+    /* The receipt is the same piece of paper whatever the figure was corrected
+       to, so it moves to the entry that now stands for it. Inside the same
+       transaction, so there is no moment where the correction exists and its
+       receipt does not. Attachments are not money, so this update is not an
+       exception to append only. */
+    await tx.attachment.updateMany({
+      where: { transactionId: original.id },
+      data: { transactionId: replacement.id },
+    });
+
+    return replacement;
   });
 }
 
