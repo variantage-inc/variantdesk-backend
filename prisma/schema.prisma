@@ -45,7 +45,6 @@ enum BusinessType {
 enum Currency {
   CAD
   USD
-  PKR
 }
 
 // Inside one business. The owner pays and controls membership.

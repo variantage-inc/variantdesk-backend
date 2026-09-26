@@ -73,13 +73,16 @@ export function sendPasswordReset(to: string, token: string): Promise<boolean> {
   });
 }
 
+export const inviteUrlFor = (token: string): string =>
+  `${env.APP_URL}/accept-invite?token=${encodeURIComponent(token)}`;
+
 export function sendMemberInvite(
   to: string,
   token: string,
   businessName: string,
   invitedBy: string,
 ): Promise<boolean> {
-  const url = `${env.APP_URL}/accept-invite?token=${encodeURIComponent(token)}`;
+  const url = inviteUrlFor(token);
   return send({
     to,
     subject: `${invitedBy} added you to ${businessName} on Variantage`,

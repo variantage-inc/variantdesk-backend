@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { email, password, personName } from '../../lib/validation.js';
-import { sendMemberInvite } from '../../lib/email.js';
+import { inviteUrlFor, sendMemberInvite } from '../../lib/email.js';
 import { setRefreshCookie } from '../../lib/cookies.js';
 import { param } from '../../lib/params.js';
 import { isDev } from '../../lib/env.js';
@@ -87,9 +87,11 @@ teamRouter.post(
     try {
       const result = await team.invite(req.auth!.businessId, req.auth!.userId, req.body.email);
 
-      /* Not awaited, and a failure never fails this request. The invite exists
-         in the database either way, and the owner can resend it. */
-      void sendMemberInvite(
+      /* A failed email never fails this request: the invite exists either
+         way. But the owner is told, and given the link to pass on themselves,
+         rather than being told it was sent when it was not. The link goes only
+         to the owner who just created it, and only when the email did not go. */
+      const emailed = await sendMemberInvite(
         req.body.email,
         result.inviteToken,
         result.businessName,
@@ -97,7 +99,12 @@ teamRouter.post(
       );
       if (isDev) console.log(`[dev] invite token for ${req.body.email}: ${result.inviteToken}`);
 
-      res.status(201).json({ ok: true, team: await team.listTeam(req.auth!.businessId) });
+      res.status(201).json({
+        ok: true,
+        emailed,
+        inviteUrl: emailed ? null : inviteUrlFor(result.inviteToken),
+        team: await team.listTeam(req.auth!.businessId),
+      });
     } catch (err) {
       next(err);
     }

@@ -208,8 +208,7 @@ export async function updateProfile(businessId: string, input: ProfileInput) {
 }
 
 type TaxInput = {
-  province: string;
-  currency: 'CAD' | 'USD' | 'PKR';
+  currency: 'CAD' | 'USD';
   dateFormat: 'YYYY/MM/DD' | 'DD/MM/YYYY' | 'MM/DD/YYYY';
   fyStartMonth: number;
   gstRegistered: boolean;
@@ -220,7 +219,6 @@ export async function updateTax(businessId: string, input: TaxInput) {
   const business = await prisma.business.update({
     where: { id: businessId },
     data: {
-      province: input.province,
       currency: input.currency,
       dateFormat: input.dateFormat,
       fyStartMonth: input.fyStartMonth,

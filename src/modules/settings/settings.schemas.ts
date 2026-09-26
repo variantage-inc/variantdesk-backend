@@ -39,10 +39,13 @@ export const businessProfileSchema = z.object({
   businessNumber: optionalText('The business number', 20),
 });
 
+/* The province is not here. It is chosen at signup and fixed from then on:
+   every tax figure already in the books was worked out from it, and a business
+   that could switch province would have new entries and old ones taxed as if
+   they were two different businesses. */
 export const taxSchema = z
   .object({
-    province,
-    currency: z.enum(['CAD', 'USD', 'PKR']),
+    currency: z.enum(['CAD', 'USD'], { message: 'Choose Canadian or US dollars.' }),
     dateFormat: z.enum(['YYYY/MM/DD', 'DD/MM/YYYY', 'MM/DD/YYYY']),
     fyStartMonth: z.coerce.number().int().min(1).max(12),
     gstRegistered: z.boolean(),
