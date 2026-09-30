@@ -8,8 +8,17 @@ import { requireAuth, requireOwner } from '../../middleware/requireAuth.js';
 import { validate } from '../../middleware/validate.js';
 import { ApiError } from '../../middleware/error.js';
 import * as billing from './billing.service.js';
+import { isStaffBusiness } from '../../lib/staff.js';
+import type { RequestHandler } from 'express';
 
 export const billingRouter: Router = Router();
+
+/* The staff business is never billed, so nothing here may start a checkout,
+   change its plan or open a card portal for it. */
+const notStaff: RequestHandler = (req, _res, next) =>
+  isStaffBusiness(req.auth!.businessId)
+    ? next(new ApiError(403, 'The Variantage staff account is not billed.', 'staff_not_billed'))
+    : next();
 
 /* Everything below is owner only except the status read.
 
@@ -56,6 +65,7 @@ billingRouter.put(
   '/plan',
   requireAuth,
   requireOwner,
+  notStaff,
   validate(planSchema),
   async (req, res, next) => {
     try {
@@ -87,6 +97,7 @@ billingRouter.post(
   '/checkout',
   requireAuth,
   requireOwner,
+  notStaff,
   validate(returnSchema),
   async (req, res, next) => {
     try {
@@ -107,6 +118,7 @@ billingRouter.post(
   '/portal',
   requireAuth,
   requireOwner,
+  notStaff,
   validate(returnSchema),
   async (req, res, next) => {
     try {
@@ -143,6 +155,7 @@ if (isDev) {
     '/simulate',
     requireAuth,
     requireOwner,
+    notStaff,
     validate(simulateSchema),
     async (req, res, next) => {
       try {

@@ -1,9 +1,10 @@
 /* Creates the Variantage staff sign in for the superadmin panel at /admin.
 
    Every user row needs a business, so staff get one of their own, by a fixed
-   id, holding nothing. It is never a customer's business: promoting somebody
-   inside a real customer account would give that account's owner a colleague
-   who can read every other business.
+   id. It is never billed: its books stay writable without a trial or a card.
+   It is never a customer's business either: promoting somebody inside a real
+   customer account would give that account's owner a colleague who can read
+   every other business.
 
    Safe to run again. The password is only set when the user is created, so a
    rerun never undoes a change made afterwards in Settings, Security. Pass
@@ -16,24 +17,30 @@
 import { prisma } from '../src/lib/prisma.js';
 import { hashPassword } from '../src/lib/password.js';
 import { defaultCategories } from '../src/lib/defaults.js';
-import { trialCreateData } from '../src/modules/billing/billing.service.js';
+import { STAFF_BUSINESS_ID } from '../src/lib/staff.js';
 
-const BUSINESS_ID = 'variantage-staff';
+const BUSINESS_ID = STAFF_BUSINESS_ID;
 const EMAIL = 'support@variantage.com';
 const DEMO_PASSWORD = 'VariantageAdmin2026!';
 
 async function main() {
   const reset = process.argv.includes('--reset-password');
 
+  /* ACTIVE with no Stripe subscription behind it: the books are writable for
+     good, no trial runs out, and no card is asked for. Stripe only learns of
+     a business through checkout, which billing refuses for this one, so no
+     webhook can move it. */
+  const unbilled = { plan: 'ESSENTIAL', status: 'ACTIVE', trialEndsAt: null } as const;
+
   await prisma.business.upsert({
     where: { id: BUSINESS_ID },
-    update: {},
+    update: { subscription: { upsert: { create: unbilled, update: unbilled } } },
     create: {
       id: BUSINESS_ID,
       name: 'Variantage Staff',
       legalName: 'Variantage Inc.',
       province: 'ON',
-      subscription: { create: trialCreateData() },
+      subscription: { create: unbilled },
       categories: { create: defaultCategories() },
     },
   });

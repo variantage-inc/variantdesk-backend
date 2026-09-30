@@ -2,6 +2,7 @@ import { prisma } from '../../lib/prisma.js';
 import { ApiError } from '../../middleware/error.js';
 import { monthlyTotalCents, PLANS } from '../../lib/plans.js';
 import { accessFrom } from '../billing/access.js';
+import { STAFF_BUSINESS_ID } from '../../lib/staff.js';
 
 /* The Variantage side of the product.
 
@@ -35,9 +36,10 @@ export async function audit(
    how a dashboard talks a company into believing it is twice its real size. */
 export async function metrics() {
   const [subs, businesses, users, payments] = await Promise.all([
-    prisma.subscription.findMany(),
-    prisma.business.count({ where: { deletedAt: null } }),
-    prisma.user.count({ where: { deletedAt: null } }),
+    /* The staff business is not a customer, so it is not counted as one. */
+    prisma.subscription.findMany({ where: { businessId: { not: STAFF_BUSINESS_ID } } }),
+    prisma.business.count({ where: { deletedAt: null, id: { not: STAFF_BUSINESS_ID } } }),
+    prisma.user.count({ where: { deletedAt: null, businessId: { not: STAFF_BUSINESS_ID } } }),
     prisma.payment.findMany({
       where: { createdAt: { gte: startOfMonth() } },
     }),
@@ -82,6 +84,7 @@ export async function listBusinesses(search: string | undefined) {
   const businesses = await prisma.business.findMany({
     where: {
       deletedAt: null,
+      id: { not: STAFF_BUSINESS_ID },
       ...(search
         ? {
             OR: [
